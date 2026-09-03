@@ -81,11 +81,11 @@ function remesa(overrides: Partial<RemittanceState> = {}): RemittanceState {
 }
 
 describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de al lado", () => {
-  it("muestra 0,0040 y NO muestra ninguno de los tres números equivocados", () => {
+  it("muestra 0,0036 y NO muestra ninguna de las siete cadenas equivocadas", () => {
     render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
     const card = within(subarbolDelCierre());
 
-    expect(card.getByText(/0,0040/)).toBeInTheDocument();
+    expect(card.getByText(/0,0036/)).toBeInTheDocument();
 
     const texto = subarbolDelCierre().textContent ?? "";
     // ⚠️ QUÉ CUBRE ESTA LISTA Y QUÉ NO — la versión corregida de una frase que afirmaba de más
@@ -96,18 +96,34 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
     // formateada con el floor pasó los cinco `not.toContain` de la lista vieja en verde.
     //
     // 🔴 LO QUE ESTA LISTA NO PUEDE CERRAR, medido y declarado: la BANDA. Con floor y 4 decimales,
-    // TODO el intervalo [4.000.000, 4.099.999] se escribe "0,0040", así que ningún assert sobre el
-    // texto puede distinguir el alquiler de un valor vecino dentro de la banda. Mutante aplicado de
-    // verdad (`ESCROW_DEPOSIT_RENT_LAMPORTS + 5_000`): SOBREVIVE la suite completa, 1297/0. Y la salida
-    // sugerida —assertar la identidad de la expresión, `toContain(formatLamportsAsSolFloor(RENT))`—
-    // TAMPOCO lo mata: también da "0,0040", medido en verde con el mutante puesto. Cerrar la banda
-    // pediría que la pantalla mostrara más precisión de la que un humano necesita, así que queda
-    // DECLARADO: dentro de la banda la persona ve exactamente lo mismo, y lo que no tiene red es una
-    // futura "mejora" que le sume la comisión a la cifra.
-    expect(texto).not.toContain("0,0041"); // ceil del alquiler, y también el umbral de depósito
+    // TODO el intervalo [3.600.000, 3.699.999] se escribe "0,0036" (antes de HU-077 la banda era
+    // [4.000.000, 4.099.999] ⇒ "0,0040"), así que ningún assert de ESTE archivo sobre el TEXTO puede
+    // distinguir el alquiler de un valor vecino dentro de la banda, ni derivando el literal de la
+    // propia expresión (los dos lados del assert se moverían juntos). ⚠️ HISTORIA, NO ESTADO ACTUAL
+    // (fix-pack AR/MNR-2): acá se leía «mutante aplicado de verdad (`ESCROW_DEPOSIT_RENT_LAMPORTS +
+    // 5_000`): SOBREVIVE la suite completa, 1297/0». Esa constante YA NO EXISTE (HU-077 la partió en
+    // `_RETURNED_`/`_CHARGED_`) y el 1297 es de una suite que hoy colecta 3523 tests. Re-medido el
+    // 2026-09-03 con su equivalente vivo, +5.000 sobre la hoja `ESCROW_STATE_RENT_DEVNET_LAMPORTS`:
+    // YA NO SOBREVIVE — 3 rojos propios (4 menos el del IDL, que es ambiental), y quien lo mata es T-077-2 (1) en `solana-escrow-rent.test.ts`, con `expected 3646475 to be 3641475`: la constante contra el oráculo en cadena. O sea que la banda sigue abierta para las aserciones de TEXTO de acá, y está cerrada para la SUITE por un test de VALOR EXACTO que vive en otro archivo. Lo que sigue sin red es una futura "mejora" que le sume la comisión a la cifra.
+    //
+    // 🔴 HU-077 — LA LISTA SE RE-DERIVÓ Y PASÓ DE 5 A 7 CADENAS. ⛔ NO se borró ninguna de las viejas:
+    // cada una sigue señalando un error real, y el propio archivo ya explica arriba (`:17-22`) por qué
+    // conserva cadenas cuya vía de aparición se cerró. Lo que se agrega:
+    //   · "0,0040" es EL DEFECTO DE ESTA HU: el valor de MAINNET (4.002.000) en el lado que se muestra.
+    //     Hasta hoy era la cifra que la pantalla prometía, y por eso vivía en la aserción de PRESENCIA.
+    //   · "0,0037" es el ceil del alquiler NUEVO ⇒ formateador equivocado. Reemplaza EN FUNCIÓN a
+    //     "0,0041", que se conserva igual porque sigue siendo el ceil del valor de mainnet.
+    //   · "0,0084" / "0,0085" son la suma con el índice sobre el total NUEVO (3.641.475 + 4.774.560 =
+    //     8.416.035), floor y ceil. Las viejas "0,0087"/"0,0088" son esa misma suma sobre el total
+    //     viejo, y también se conservan.
+    expect(texto).not.toContain("0,0040"); // 🔴 el valor de MAINNET del lado que se muestra: EL DEFECTO
+    expect(texto).not.toContain("0,0037"); // ceil del alquiler que vuelve (formateador equivocado)
+    expect(texto).not.toContain("0,0041"); // ceil del valor de mainnet, y antes también el umbral
     expect(texto).not.toContain("0,0048"); // ceil del alquiler del EscrowIndex
     expect(texto).not.toContain("0,0047"); // floor del mismo
-    expect(texto).not.toContain("0,0088"); // ceil de la suma con el índice
+    expect(texto).not.toContain("0,0085"); // ceil de la suma con el índice, sobre el total NUEVO
+    expect(texto).not.toContain("0,0084"); // floor de la misma
+    expect(texto).not.toContain("0,0088"); // ceil de la suma con el índice, sobre el total viejo
     expect(texto).not.toContain("0,0087"); // floor de la misma
     expect(texto).not.toContain("4.774.560"); // el índice en lamports
     expect(texto).not.toContain("4774560");
@@ -140,7 +156,7 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
       expect(body).toContain("no lo sabemos de antemano");
       // Y las dos nombran LAS DOS cuentas y la cifra del floor, que son hechos del mecanismo.
       expect(body).toContain("la que guardó tus USDC");
-      expect(body).toContain("0,0040");
+      expect(body).toContain("0,0036");
     },
   );
 

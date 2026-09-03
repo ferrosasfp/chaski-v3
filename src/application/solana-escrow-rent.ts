@@ -40,19 +40,19 @@
 // DERIVACIÓN DEL UMBRAL — cada sumando tiene una fuente, ninguno sale de una estimación:
 //
 //   ── lo que el DEPÓSITO le saca a la billetera ──────────────────────────────────────────────────
-//   EscrowState (154 bytes) ......... 1.962.720 lamports  ← solana-programs/README.md, sección
-//                                                            "On-chain state": el renglón que dice
-//                                                            ese mismo número. Medido, no estimado.
+//   EscrowState (154 bytes) ......... 1.962.720 lamports  ← solana-programs/README.md, "On-chain
+//                                                            state". 🔴 ES EL NÚMERO DE MAINNET (factor
+//                                                            6960): devnet HOY cobra 1.785.906 (6333).
 //   vault (ATA del mint, 165 bytes) . 2.039.280 lamports  ← el README lo da como "standard SPL" sin
 //                                                            número. Sale de la resta de la medición
-//                                                            en cadena: 4.002.000 - 1.962.720 =
-//                                                            2.039.280, que es exactamente el
-//                                                            rent-exempt canónico de una token
-//                                                            account SPL. Los dos caminos coinciden.
-//   subtotal depósito ............... 4.002.000 lamports  ← COINCIDE EXACTO con lo medido en cadena
-//                                                            para el primer depósito de una wallet
-//                                                            nueva. Es la prueba de que no falta
-//                                                            ninguna cuenta en esta lista.
+//                                                            en cadena (4.002.000 - 1.962.720) y es el
+//                                                            rent-exempt canónico de una token account
+//                                                            SPL. 🔴 TAMBIÉN ES DE MAINNET: devnet hoy
+//                                                            cobra 1.855.569. Ver el bloque HU-077.
+//   subtotal depósito ............... 4.002.000 lamports  ← ERA CIERTO PARA SU FECHA, y lo prueban 14
+//                                                            cuentas vivas en devnet creadas a 6960. La
+//                                                            tarifa de devnet cambió SOLA a 6333: hoy
+//                                                            son 3.641.475. NO baja acá: PIDE ⇒ MÁXIMO.
 //
 //   ── lo que el REFUND le va a sacar después, y el umbral no cubría ──────────────────────────────
 //   En `refundEscrow` el feePayer es el SENDER (`solana-wallet.ts`, `tx.feePayer = senderPk`), así
@@ -146,11 +146,11 @@
  *     INIT_SPACE = 32 (sender) + 1 (version) + 1 (bump) + 4 (prefijo del Vec)
  *                  + 16 × 32 (las entradas, `#[max_len(MAX_ENTRIES)]`)  = 550
  *     ⇒ space    = 558 bytes
- *     rent-exempt = (128 + 558) × 6960 = 4.774.560 lamports
- *
+ *     rent-exempt = (128 + 558) × 6960 = 4.774.560 lamports  ← 🔴 el factor de MAINNET; devnet hoy
+ *     cobra 4.344.438 (6333). Este número es el MÁXIMO de {devnet, mainnet} porque es lado PIDE (CD-44).
  * LA VALIDACIÓN QUE LO VUELVE UNA DERIVACIÓN Y NO UNA ESTIMACIÓN: la MISMA fórmula aplicada a
  * `EscrowState` (154 bytes) da (128 + 154) × 6960 = 1.962.720, que es exactamente
- * (`ESCROW_STATE_RENT_LAMPORTS`, `:203`), un número que salió de una medición en cadena y no de esta
+ * (`ESCROW_STATE_RENT_MAINNET_LAMPORTS`, `:232`), que salió de una medición en cadena y no de esta
  * fórmula. Los dos caminos coinciden sobre un valor conocido-bueno. Sin esta validación, el 4.774.560
  * sería un literal más.
  *
@@ -160,7 +160,7 @@
  * igual lo pide siempre: ver el punto 4 de "lo que este umbral cuesta", más arriba.
  *
  * ⛔ LO QUE NO VUELVE, y va dicho porque cambia lo que se le puede prometer a la persona: este
- * alquiler NO está en (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:223`) y NO vuelve con el `close`. La cuenta
+ * alquiler NO está en (`ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS`, `:273`) y NO vuelve con el `close`. La cuenta
  * `escrow_index` es OPCIONAL en la ix `close` y existe un `close` válido que ni la recibe, así que su
  * alquiler no puede estar en lo que `close` devuelve siempre. Que ninguna instrucción del programa la
  * cierre es lectura del RUST, no del IDL: el IDL no expresa las constraints `close = ...` de Anchor.
@@ -168,11 +168,11 @@
  */
 export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
 
-/** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet: el subtotal
- *  de arriba. Se escribe como la MEDICIÓN y no como la suma de sus partes a propósito — son dos
- *  fuentes independientes del mismo número, y hay un test que verifica que coinciden con
- *  (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:223`). Si divergen, una de las dos está mal y hay que ir a ver
- *  cuál. */
+/** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet CUANDO DEVNET
+ *  COBRABA 6960: el subtotal de arriba. Se escribe como la MEDICIÓN y no como la suma de sus partes a
+ *  propósito — son dos fuentes independientes del mismo número, y hay un test que verifica que coinciden
+ *  con (`ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS`, `:290`). Si divergen, mainnet movió su tarifa y el umbral
+ *  hay que re-derivarlo. 🔴 Devnet hoy cobra 3.641.475 y este número NO baja: es sumando del umbral ⇒ lado PIDE ⇒ MÁXIMO de {devnet, mainnet} (CD-44), y hoy ese máximo es mainnet. */
 const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
 
 /** La comisión que el REFUND le va a sacar al sender después, y que el umbral tiene que dejarle
@@ -191,37 +191,106 @@ export const SENDER_MIN_LAMPORTS_FOR_DEPOSIT =
   ESCROW_INDEX_RENT_LAMPORTS;
 
 // ── WKH-327 · el mismo alquiler, ahora mirado desde el lado que lo DEVUELVE ─────────────────────────
-// Estos tres números NO son nuevos: son exactamente los sumandos que la derivación de acá arriba ya
-// escribió (`:42-55`), extraídos a constantes porque a partir de esta HU hay una segunda pregunta que
-// los necesita — cuánto recupera la persona al cerrar las cuentas. Escribirlos de nuevo en la UI es
-// cómo la cifra de pantalla y la derivación empiezan a divergir sin que nada se ponga rojo.
+// Estos números NO son nuevos: son los sumandos que la derivación de acá arriba ya escribió (`:42-55`),
+// extraídos a constantes porque desde WKH-327 hay una segunda pregunta que los necesita — cuánto
+// recupera la persona al cerrar las cuentas. Escribirlos de nuevo en la UI es cómo la cifra de pantalla
+// y la derivación empiezan a divergir sin que nada se ponga rojo.
 //
 // ⛔ Ninguno de estos se suma a SENDER_MIN_LAMPORTS_FOR_DEPOSIT ni lo modifica.
+//
+// 🔴 HU-077 · POR QUÉ AHORA HAY CUATRO HOJAS Y NO DOS. La pantalla del cierre prometía "0,0040" SOL de
+// vuelta y la cadena donde la app corre devolvía "0,0036": 360.525 lamports de sobre-promesa. LA CAUSA
+// NO FUE UN NÚMERO MAL MEDIDO. Los 4.002.000 eran CIERTOS para su fecha, y lo prueban 14 cuentas
+// `EscrowState` vivas en devnet creadas al factor 6960 (barrido `getProgramAccounts(DR5Go…SE4x,
+// dataSize: 154)`, 2026-09-03: 14 cuentas con 1.962.720 y 1 con 1.785.906). LA CADENA MOVIÓ SU TARIFA
+// SOLA — devnet pasó de 6960 a 6333 lamports por byte-año — y todo depósito nuevo cae del lado nuevo,
+// porque la tarifa se cobra al crear. Medido contra los DOS RPC vivos el 2026-09-03, re-corrible con
+// `getMinimumBalanceForRentExemption(size)`:
+//
+//     size                        devnet        mainnet
+//     154 (EscrowState) ....... 1.785.906      1.962.720
+//     165 (ATA del vault) ..... 1.855.569      2.039.280
+//     suma 154 + 165 .......... 3.641.475      4.002.000
+//     factor POR DIFERENCIA, que saca el +128 de la ecuación: (rent165 − rent154) / (165 − 154)
+//       ⇒ devnet 69.663 / 11 = 6333 exacto · mainnet 76.560 / 11 = 6960 exacto
+//
+// ⇒ el arreglo NO podía ser "corregir un número mal escrito": los dos son correctos, cada uno de su
+// cadena. Es separarlos POR DIRECCIÓN, que es lo que manda CD-44 — el conjunto de cadenas objetivo es
+// el MISMO para los dos lados, {devnet, mainnet}, y lo que cambia es el OPERADOR:
+//   · MÁXIMO cuando el número es una cota superior: lo que se le PIDE a la persona. Pedir de más es
+//     recuperable; pedir de menos deja una transacción revertida o a alguien sin poder firmar.
+//   · MÍNIMO cuando es algo que la persona RECIBE. Prometer de menos es el error barato.
+//
+// ⚠️ LO QUE ESTO NO HACE, dicho para que nadie le crea de más: NO vuelve la app consciente de la red.
+// Sigue habiendo UNA constante por dirección para LAS DOS cadenas. El día que la app corra en mainnet,
+// el lado RECIBE seguirá prometiendo el mínimo de devnet ⇒ prometerá DE MENOS, que es el error que
+// CD-44 elige a propósito. Leer la tarifa del RPC en runtime es otra HU, y no es ésta.
 
-/** `EscrowState`, 154 bytes. Fuente: `:43-45` (solana-programs/README.md:345, medido por la suite del
- *  programa contra el banco in-process). */
-export const ESCROW_STATE_RENT_LAMPORTS = 1_962_720;
+/** `EscrowState`, 154 bytes, al factor de MAINNET (6960). Fuentes: `:43-45`
+ *  (solana-programs/README.md:345, medido por la suite del programa contra el banco in-process) y
+ *  `getMinimumBalanceForRentExemption(154)` contra api.mainnet-beta.solana.com, 2026-09-03. */
+export const ESCROW_STATE_RENT_MAINNET_LAMPORTS = 1_962_720;
 
-/** ATA del vault, 165 bytes. Fuente: `:46-51` — sale de la resta de la medición en cadena
- *  (4.002.000 − 1.962.720) y coincide con el rent-exempt canónico de una token account SPL. */
-export const ESCROW_VAULT_RENT_LAMPORTS = 2_039_280;
+/** `EscrowState`, 154 bytes, al factor de DEVNET (6333) — la cadena donde la app corre hoy.
+ *  `getMinimumBalanceForRentExemption(154)` contra api.devnet.solana.com, 2026-09-03. Es además el
+ *  saldo real de `EyUXgVNLjYJ2Av8NayGH9q8aeKCsxtkPhYXQz8rVJJxA`, leída cuenta por cuenta ese día. */
+export const ESCROW_STATE_RENT_DEVNET_LAMPORTS = 1_785_906;
+
+/** ATA del vault, 165 bytes, al factor de MAINNET. Fuente: `:46-51` — sale de la resta de la medición
+ *  en cadena (4.002.000 − 1.962.720) y coincide con el rent-exempt canónico de una token account SPL.
+ *  Confirmado además por `getMinimumBalanceForRentExemption(165)` contra mainnet, 2026-09-03. */
+export const ESCROW_VAULT_RENT_MAINNET_LAMPORTS = 2_039_280;
+
+/** ATA del vault, 165 bytes, al factor de DEVNET.
+ *  `getMinimumBalanceForRentExemption(165)` contra api.devnet.solana.com, 2026-09-03. Es además el
+ *  saldo real de `H3LA8T3KhVjX8ap2cmNvJhs88nagroEskkMsz17bjdDY`, el vault del par de arriba. */
+export const ESCROW_VAULT_RENT_DEVNET_LAMPORTS = 1_855_569;
 
 /**
- * Lo que la ix `close` le devuelve al remitente: el alquiler de LAS DOS cuentas que el `deposit` creó
- * con `payer = sender`. Fuente del subtotal: `:52-55`, donde ya está dicho que 4.002.000 COINCIDE
- * EXACTO con lo medido en cadena para el primer depósito de una billetera nueva.
+ * 🔴 LO QUE LA PERSONA RECIBE al cerrar: el alquiler de LAS DOS cuentas que el `deposit` creó con
+ * `payer = sender`, tomado como el MÍNIMO sobre las dos cadenas objetivo. Es el lado RECIBE de CD-44 y
+ * por eso el operador es `Math.min`: prometer de menos es el error barato; prometer de más es el
+ * defecto que HU-077 vino a cerrar.
  *
- * ⛔ NO incluye el alquiler de `EscrowIndex` (4.774.560 lamports) y no es un olvido. Lo que sostiene
- * la exclusión, y es lo verificable: la ix `close` declara `escrow_index` como cuenta OPCIONAL en el
- * IDL, así que existe un `close` válido que ni la recibe y su alquiler no puede estar en lo que
- * `close` devuelve siempre (test en `solana-escrow-rent.test.ts`). Que ninguna instrucción del
- * programa cierre esa cuenta **no se pudo verificar** desde este repo: el IDL no expresa las
- * constraints `close = ...` de Anchor. Ver `:16-38` (la historia del sumando) y `:82-89` (el renglón
- * del índice en la derivación del umbral, que desde WKH-347 SÍ se cobra en el depósito aunque no vuelva
- * con el `close` — son dos preguntas distintas y ésta no cambió).
+ * ⛔ EL OPERADOR VA EN CÓDIGO EJECUTABLE Y NO EN PROSA, y eso es la mitad del arreglo. Las dos
+ * expresiones de acá abajo son idénticas salvo `min`/`max`, así que el mutante que las intercambia es
+ * de UN carácter y hay un test que lo mata. Escribir el resultado (`3_641_475`) como literal sería
+ * volver a dejar la regla en prosa, que es exactamente de donde salió este defecto. Y si algún día
+ * devnet sube por encima de mainnet, el número se corrige solo sin que nadie edite nada.
+ *
+ * HOY gana devnet: 1.785.906 + 1.855.569 = 3.641.475 lamports, que es lo que devuelve el `close` del
+ * par `EyUX…` + `H3LA…` medido en cadena el 2026-09-03, y que se muestra como "0,0036" SOL.
+ *
+ * ⛔ NO incluye el alquiler de `EscrowIndex` y no es un olvido. Lo que sostiene la exclusión, y es lo
+ * verificable: la ix `close` declara `escrow_index` como cuenta OPCIONAL en el IDL, así que existe un
+ * `close` válido que ni la recibe y su alquiler no puede estar en lo que `close` devuelve siempre (test
+ * en `solana-escrow-rent.test.ts`). Que ninguna instrucción del programa cierre esa cuenta **no se pudo
+ * verificar** desde este repo: el IDL no expresa las constraints `close = ...` de Anchor. Ver `:16-38`
+ * (la historia del sumando) y `:82-89` (el renglón del índice en la derivación del umbral, que desde
+ * WKH-347 SÍ se cobra en el depósito aunque no vuelva con el `close` — son dos preguntas distintas y
+ * ésta no cambió).
  */
-export const ESCROW_DEPOSIT_RENT_LAMPORTS =
-  ESCROW_STATE_RENT_LAMPORTS + ESCROW_VAULT_RENT_LAMPORTS;
+export const ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS = Math.min(
+  ESCROW_STATE_RENT_DEVNET_LAMPORTS + ESCROW_VAULT_RENT_DEVNET_LAMPORTS,
+  ESCROW_STATE_RENT_MAINNET_LAMPORTS + ESCROW_VAULT_RENT_MAINNET_LAMPORTS,
+);
+
+/**
+ * 🔴 LO QUE EL DEPÓSITO LE COBRA a la persona por esas mismas dos cuentas, tomado como el MÁXIMO sobre
+ * las dos cadenas objetivo. Es el lado PIDE de CD-44 ⇒ `Math.max`.
+ *
+ * HOY gana mainnet: 1.962.720 + 2.039.280 = 4.002.000 lamports, que es EXACTAMENTE lo que el primer
+ * depósito del remitente `8tJVcM2J` costó en cadena. Esa identidad la asserta el test contra
+ * `MEASURED_FIRST_DEPOSIT_LAMPORTS`, que sigue escrito a mano como oráculo independiente.
+ *
+ * ⚠️ NO se llama `_MAX_`: en ESTE archivo `SENDER_MIN_LAMPORTS_FOR_DEPOSIT` usa `MIN` con el sentido
+ * opuesto ("el mínimo que hay que tener", que es lado PIDE), así que un `_MIN_`/`_MAX_` acá se leería
+ * al revés y el próximo call-site elegiría mal. `RETURNED`/`CHARGED` no admiten esa lectura.
+ */
+export const ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS = Math.max(
+  ESCROW_STATE_RENT_DEVNET_LAMPORTS + ESCROW_VAULT_RENT_DEVNET_LAMPORTS,
+  ESCROW_STATE_RENT_MAINNET_LAMPORTS + ESCROW_VAULT_RENT_MAINNET_LAMPORTS,
+);
 
 /** 5.000 lamports por firma. Fuente: `:64-69` — el depósito tiene 2 firmas y midió 10.000 en cadena.
  *  La tx de `close` tiene UNA sola (el sender es el único signer). Lo que este número NO cubre: la
@@ -265,29 +334,33 @@ export function formatLamportsAsSol(lamports: number): string {
  * de estilo, depende de si el número es algo que se PIDE o algo que se RECIBE, y son dos decisiones
  * distintas que conviene no poder mezclar en un call-site.
  *   · `formatLamportsAsSol` redondea ARRIBA porque le dice a alguien cuánto cargar, y pedir de más es
- *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:256`).
+ *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:325`).
  *   · Ésta redondea ABAJO porque el número es lo que la persona va a COBRAR, y redondear hacia arriba
  *     lo que alguien va a cobrar es prometer de más.
  *
- * EL CASO CONCRETO, medido: `formatLamportsAsSol(ESCROW_DEPOSIT_RENT_LAMPORTS)` devuelve "0,0041"
- * sobre un valor real de 0,004002 SOL — sobreestima 2,4% lo que la persona recupera. Con el floor la
- * cifra es "0,0040", y ésa sigue siendo la razón por la que esta función existe: no prometer de más lo
- * que alguien va a cobrar.
+ * EL CASO CONCRETO, medido: `formatLamportsAsSol(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)` devuelve
+ * "0,0037" sobre un valor real de 0,003641475 SOL — sobreestima 1,61 % lo que la persona recupera
+ * (0,0037 / 0,003641475). Con el floor la cifra es "0,0036", y ésa sigue siendo la razón por la que
+ * esta función existe: no prometer de más lo que alguien va a cobrar.
  *
  * ⚠️ LA COLISIÓN QUE MOTIVÓ ESTA FUNCIÓN YA NO EXISTE, y conviene decirlo antes de que alguien la cite
  * como si siguiera vigente. Hasta WKH-347, "0,0041" era EXACTAMENTE la misma cadena que devolvía
  * `formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)`, así que un test de copy que assertara
  * "0,0041" pasaba igual con la constante equivocada adentro, y el `floor` era lo que separaba las dos
- * cadenas. Con el umbral de WKH-347 el umbral se muestra "0,0089" y el alquiler devuelto "0,0041": ya
- * no colisionan por sí solos.
+ * cadenas. Con el umbral de WKH-347 el umbral se muestra "0,0089" y el alquiler devuelto "0,0036"
+ * (era "0,0041" hasta HU-077, cuando el lado que se muestra llevaba el valor de mainnet): ya no
+ * colisionan por sí solos.
  *
  * ⇒ El `floor` NO se saca por eso, y el test de separación TAMPOCO. La colisión desapareció por el
  * VALOR de una constante que puede volver a moverse, no por una propiedad de estas dos funciones; el
  * único guard que no depende de ese valor es el que compara `floor(RENT)` contra `ceil(UMBRAL)`
  * directamente. Ése es el que sostiene al test de copy y el que hay que conservar.
  *
- * LO QUE EL FLOOR CUESTA, dicho: subestima 0,000002 SOL (0,05%). Es el error barato — quedarse corto
- * en lo que se promete devolver.
+ * LO QUE EL FLOOR CUESTA, dicho SIN SUAVIZAR porque creció 23×: subestima 0,000041475 SOL, o sea el
+ * 1,14 % (41.475 / 3.641.475). Hasta HU-077 eran 0,000002 SOL (0,05 %) sobre el valor de mainnet, y la
+ * diferencia no es del formateador: es que 3.641.475 cae casi en el borde superior de su banda de
+ * display mientras 4.002.000 caía cerca del inferior. Sigue siendo el error barato —quedarse corto en
+ * lo que se promete devolver— pero ya no es despreciable, y quien lo lea tiene que verlo en su tamaño.
  *
  * El `floor` corre sobre ENTEROS (lamports por unidad de display), nunca sobre el flotante en SOL, por
  * la misma razón de representación binaria que su hermana.
@@ -300,9 +373,11 @@ export function formatLamportsAsSolFloor(lamports: number): string {
 // ── WKH-357 · el umbral del camino por ENLACE PROFUNDO (durable nonce) ──────────────────────────────
 //
 // Va TODO al FINAL del archivo, y eso es una decisión medida, no un descuido de orden: este archivo
-// recibe 5 citas ancladas por número (a `:128`, `:128`, `:203`, `:223`, `:223`). Insertando acá abajo
-// no se mueve NINGUNA; insertando arriba de `:181` se mueven 3. Y además tiene que estar después de
-// `:230`, porque referencia a `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS`: es la misma regla que este
+// recibe citas ancladas por número, y HU-077 las re-derivó: hoy son a `:128` (×2), `:232`, `:273` y
+// `:290` — las tres últimas eran a `:203`/`:223`/`:223`, o sea a las dos constantes que HU-077 partió
+// en cuatro hojas y dos agregados, así que ni los números ni los nombres sobrevivieron. Insertando acá
+// abajo no se mueve NINGUNA; insertando arriba de `:181` se mueven 3. Y además tiene que estar después de
+// `:299`, porque referencia a `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS`: es la misma regla que este
 // archivo ya escribió en `:138-141` — un `const` no puede referenciar a otro que se declara después.
 
 /** La propina que la billetera inyecta en una tx que NO declara ComputeBudget: 375.000 µL/CU ×
@@ -310,7 +385,7 @@ export function formatLamportsAsSolFloor(lamports: number): string {
  *
  *  ⚠️ SÍ, ES EL MISMO 75.000 QUE `REFUND_FEE_ALLOWANCE_LAMPORTS` (`:181`) LLEVA COMO LITERAL, y `:181`
  *  NO se reescribe para usar esta constante. El motivo es mecánico y no estético: `:181` se declara
- *  ANTES que `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS` (`:230`), así que no puede referenciarlo, y
+ *  ANTES que `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS` (`:299`), así que no puede referenciarlo, y
  *  mover cualquiera de las dos cosas para "unificar" rompe la evaluación del módulo o corre 3 citas
  *  ancladas. El candado contra la deriva silenciosa de los dos 75.000 es T-22, que los ata al mismo
  *  valor: si alguien cambia uno, el test se pone rojo. */
@@ -321,6 +396,13 @@ const WALLET_TIP_ALLOWANCE_LAMPORTS = 75_000;
  *  RE-MEDIDO contra devnet el 2026-08-17: `getMinimumBalanceForRentExemption(80)` → 1447680.
  *  Coincide con la fórmula pública de rent: (128 + 80) × 3480 × 2 = 1.447.680. Dos fuentes
  *  independientes sobre el mismo número, que es lo que lo vuelve una derivación y no un literal.
+ *
+ *  🔴 HU-077 — ESE 1.447.680 ES EL VALOR DE MAINNET, y hoy hay que decirlo: devnet devuelve 1.317.264
+ *  (medido el 2026-09-03, después de que su tarifa bajara de 6960 a 6333). Este número es el MÁXIMO de
+ *  {devnet, mainnet} porque es lado PIDE (CD-44) — se muestra como "Cuesta X SOL" y además FONDEA la
+ *  cuenta en cadena — y hoy ese máximo es mainnet. Fondear de más es recuperable; de menos, la tx
+ *  revierte. ⛔ Es PIDE por lo que hace, no por su valor: si algún día devnet superara a mainnet, el
+ *  máximo cambiaría de cadena y este número tendría que subir.
  *
  *  ⚠️ LA CADENA ENVEJECE SOLA: si volvés a medirlo y da otro número, el que tiene razón es el RPC y no
  *  este comentario. La medición se re-corre con:
@@ -341,7 +423,7 @@ export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_680;
  *  Los tres sumandos que se agregan son los de la tx de CREACIÓN de la cuenta de nonce, que el
  *  remitente firma y paga él (feePayer = sender, UNA sola firma):
  *    + NONCE_ACCOUNT_RENT_LAMPORTS ............ 1.447.680  el alquiler de la cuenta
- *    + SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS .     5.000  su única firma (`:230`)
+ *    + SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS .     5.000  su única firma (`:299`)
  *    + WALLET_TIP_ALLOWANCE_LAMPORTS ..........    75.000  la propina, el mismo sumando que el refund
  *
  *  ⚠️ SE PIDE SIEMPRE en el camino por enlace, tenga o no el remitente su cuenta de nonce ya creada, y

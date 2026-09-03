@@ -242,7 +242,7 @@ export function construirNonceAdvance(
  *
  * ⚠️ EL ALQUILER NO VUELVE POR NINGÚN BOTÓN DE CHASKI, y quien muestre esto en pantalla tiene que
  * decirlo: recuperarlo exige un `nonceWithdraw`, que no existe en este árbol (está declarado en
- * (`nonceWithdraw`, `../../application/solana-escrow-rent.ts:329`)). El monto lo pone quien llama, desde
+ * (`nonceWithdraw`, `../../application/solana-escrow-rent.ts:411`)). El monto lo pone quien llama, desde
  * `NONCE_ACCOUNT_RENT_LAMPORTS`.
  *
  * ⚠️ ESTA TRANSACCIÓN USA UN BLOCKHASH NORMAL y por lo tanto vence en ~60-90 s (ver el encabezado de

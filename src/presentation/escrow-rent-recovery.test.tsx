@@ -151,14 +151,23 @@ describe("AC-8: qué se dice ANTES de abrir ningún diálogo de firma", () => {
     expect(screen.getByText(/su comisión de red la pagás vos/)).toBeInTheDocument();
   });
 
-  it("dice qué se recupera y qué NO, con la cifra del floor y sin las equivocadas", () => {
+  it("dice qué se recupera y qué NO, con la cifra del floor y sin las siete equivocadas", () => {
     abrirPuerta(new FakeSolanaCloseableEscrowLister([]));
     const texto = document.body.textContent ?? "";
-    expect(texto).toContain("0,0040");
-    expect(texto).not.toContain("0,0041"); // ceil del alquiler. ⚠️ WKH-347: ya NO es también el umbral de depósito, que pasó a "0,0089"; la aserción sigue valiendo por el ceil
+    expect(texto).toContain("0,0036");
+    // 🔴 HU-077 — LA LISTA SE RE-DERIVÓ Y PASÓ DE 5 A 7 CADENAS, y ⛔ no se borró ninguna de las viejas.
+    // La pantalla prometía "0,0040" (el valor de MAINNET, 4.002.000) y la cadena donde la app corre
+    // devuelve 3.641.475 ⇒ "0,0036". Por eso "0,0040" cambia de lado: era la aserción de PRESENCIA y
+    // pasa a ser un guard de regresión por AUSENCIA. Las otras dos nuevas son el ceil del alquiler
+    // nuevo y la suma con el índice sobre el total nuevo (3.641.475 + 4.774.560 = 8.416.035).
+    expect(texto).not.toContain("0,0040"); // 🔴 el valor de MAINNET del lado que se muestra: EL DEFECTO
+    expect(texto).not.toContain("0,0037"); // ceil del alquiler que vuelve (formateador equivocado)
+    expect(texto).not.toContain("0,0041"); // ceil del valor de mainnet. ⚠️ WKH-347: ya NO es también el umbral de depósito, que pasó a "0,0089"; la aserción sigue valiendo por el ceil
     expect(texto).not.toContain("0,0047"); // floor del alquiler del índice
     expect(texto).not.toContain("0,0048"); // ceil del mismo
-    expect(texto).not.toContain("0,0087"); // floor de la suma con el índice
+    expect(texto).not.toContain("0,0084"); // floor de la suma con el índice, sobre el total NUEVO
+    expect(texto).not.toContain("0,0085"); // ceil de la misma
+    expect(texto).not.toContain("0,0087"); // floor de la suma con el índice, sobre el total viejo
     expect(texto).not.toContain("0,0088"); // ceil de la misma
     // Y nombra aparte la cuenta que NO se cierra.
     expect(screen.getByText(/tercera cuenta/)).toBeInTheDocument();
@@ -192,7 +201,7 @@ describe("la puerta no afirma nada sobre un envío que todavía no se buscó", (
     // Control positivo: el bloque explicativo SÍ está montado, o sea que los `false` de arriba no
     // pasan por una pantalla vacía.
     expect(texto).toContain("Recuperá tu depósito de red");
-    expect(texto).toContain("0,0040");
+    expect(texto).toContain("0,0036");
   });
 
   // El caso B del hallazgo: el registro apagado es el camino de fallo MÁS probable (lo prende una
@@ -250,7 +259,7 @@ describe("con varios cerrables, el explicativo no se repite una vez por envío",
     for (const frase of [
       "Recuperá tu depósito de red",
       "la que guardó tus USDC",
-      "0,0040",
+      "0,0036",
       "Hay una tercera cuenta",
     ]) {
       expect([frase, veces(texto, frase)]).toEqual([frase, 1]);

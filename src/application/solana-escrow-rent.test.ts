@@ -358,7 +358,21 @@ describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar 
     const fuente = readFileSync(join(process.cwd(), "src/presentation/flow-vm.ts"), "utf8");
     // Control positivo: sin él, un `readFileSync` que devolviera vacío haría PASAR el `not.toContain`.
     expect(fuente).toContain("export function escrowRentExplainer");
-    expect(fuente).toContain("formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)");
+    // 🔴 EL ANCLA LLEVA EL PREFIJO DE LA ASIGNACIÓN, Y NO ES ESTILO (fix-pack AR/BLQ-BAJO-1). La forma
+    //     anterior buscaba sólo `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)`, que
+    //     aparece DOS veces en `flow-vm.ts`: una en el docblock de `escrowRentExplainer` y otra en su
+    //     cuerpo (al 2026-09-03, `:392` y `:431`). `toContain` no las distingue, así que mientras el
+    //     COMENTARIO citara la expresión esta línea quedaba verde pasara lo que pasara en el call-site.
+    //     Medido con la suite completa: `:431` reescrito a `formatLamportsAsSolFloor(3_641_475)` y a un
+    //     literal `"0,0036"` dejaba TODO en verde. Es exactamente la forma del defecto que esta HU vino
+    //     a arreglar —un valor congelado que se vuelve falso solo el día que la cadena mueve su tarifa,
+    //     y ya sabemos que se mueve sola—. Con el prefijo `const monto = ` y el `;` final la cadena es
+    //     ÚNICA en el archivo (`grep -c` da 1; sin el prefijo da 2) y los dos mutantes la ponen roja.
+    // ⚠️ LO QUE ESTA LÍNEA SIGUE SIN CUBRIR: que alguien escriba esta misma sentencia COMPLETA dentro de
+    //     un comentario. El ancla exige la forma de una sentencia, no su posición: no parsea el archivo.
+    expect(fuente).toContain(
+      "const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS);",
+    );
     expect(fuente).not.toContain("ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS");
   });
 

@@ -97,14 +97,14 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
     //
     // 🔴 LO QUE ESTA LISTA NO PUEDE CERRAR, medido y declarado: la BANDA. Con floor y 4 decimales,
     // TODO el intervalo [3.600.000, 3.699.999] se escribe "0,0036" (antes de HU-077 la banda era
-    // [4.000.000, 4.099.999] ⇒ "0,0040"), así que ningún assert sobre el texto puede distinguir el
-    // alquiler de un valor vecino dentro de la banda. Mutante aplicado de verdad
-    // (`ESCROW_DEPOSIT_RENT_LAMPORTS + 5_000`): SOBREVIVE la suite completa, 1297/0. Y la salida
-    // sugerida —assertar la identidad de la expresión, `toContain(formatLamportsAsSolFloor(RENT))`—
-    // TAMPOCO lo mata: también da la misma cadena, medido en verde con el mutante puesto. Cerrar la banda
-    // pediría que la pantalla mostrara más precisión de la que un humano necesita, así que queda
-    // DECLARADO: dentro de la banda la persona ve exactamente lo mismo, y lo que no tiene red es una
-    // futura "mejora" que le sume la comisión a la cifra.
+    // [4.000.000, 4.099.999] ⇒ "0,0040"), así que ningún assert de ESTE archivo sobre el TEXTO puede
+    // distinguir el alquiler de un valor vecino dentro de la banda, ni derivando el literal de la
+    // propia expresión (los dos lados del assert se moverían juntos). ⚠️ HISTORIA, NO ESTADO ACTUAL
+    // (fix-pack AR/MNR-2): acá se leía «mutante aplicado de verdad (`ESCROW_DEPOSIT_RENT_LAMPORTS +
+    // 5_000`): SOBREVIVE la suite completa, 1297/0». Esa constante YA NO EXISTE (HU-077 la partió en
+    // `_RETURNED_`/`_CHARGED_`) y el 1297 es de una suite que hoy colecta 3523 tests. Re-medido el
+    // 2026-09-03 con su equivalente vivo, +5.000 sobre la hoja `ESCROW_STATE_RENT_DEVNET_LAMPORTS`:
+    // YA NO SOBREVIVE — 3 rojos propios (4 menos el del IDL, que es ambiental), y quien lo mata es T-077-2 (1) en `solana-escrow-rent.test.ts`, con `expected 3646475 to be 3641475`: la constante contra el oráculo en cadena. O sea que la banda sigue abierta para las aserciones de TEXTO de acá, y está cerrada para la SUITE por un test de VALOR EXACTO que vive en otro archivo. Lo que sigue sin red es una futura "mejora" que le sume la comisión a la cifra.
     //
     // 🔴 HU-077 — LA LISTA SE RE-DERIVÓ Y PASÓ DE 5 A 7 CADENAS. ⛔ NO se borró ninguna de las viejas:
     // cada una sigue señalando un error real, y el propio archivo ya explica arriba (`:17-22`) por qué

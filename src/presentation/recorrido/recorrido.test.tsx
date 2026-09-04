@@ -1147,7 +1147,7 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
 /** El bloque de copy que la pantalla de firmar REUSA de producción, tal cual se renderiza (título y
  *  cuerpo pegados). ⛔ No se transcribe: se pide al mismo productor que la pantalla consulta. */
 function textoDelAlquiler(): string {
-  const a = escrowRentExplainer("discovery");
+  const a = escrowRentExplainer("discovery", { status: "no-escrow" }); // HU-079: el MISMO argumento que pasa la pantalla (`pantallas.tsx:468`) — si divergieran, este pin dejaría de medir lo que se renderiza.
   return `${a.title}${a.body}`;
 }
 

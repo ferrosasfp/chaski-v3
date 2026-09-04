@@ -40,6 +40,7 @@ import {
   FAKE_SOLANA_BENEFICIARY,
   FakeConnectedWallet,
   FakeSolanaEscrowCloseGateway,
+  FakeSolanaRentReader,
 } from "../test-support/fakes";
 import type { RemittanceState } from "../domain/remittance";
 
@@ -54,6 +55,13 @@ function useCase(): CloseEscrowAccounts {
   // `escrow-rent-recovery.test.tsx`, contra el bridge real.
   return new CloseEscrowAccounts(new FakeSolanaEscrowCloseGateway(), new FakeConnectedWallet(sender));
 }
+
+// 🔴 HU-079 — LOS DOS PARES VIVOS DE DEVNET, medidos cuenta por cuenta con `getAccountInfo` el
+// 2026-09-04, y los dos TODAVÍA ABIERTOS. Son la razón de que esta pantalla ya no pueda mostrar UNA
+// cifra: el alquiler queda CONGELADO en las cuentas el día que se crean, así que dos escrows de la
+// MISMA cadena devuelven distinto y ninguna constante puede acertarle a los dos.
+const PAR_VIVO_MAYORITARIO = 4_002_000; // 14 de los 15 escrows vivos ⇒ "0,0040"
+const PAR_VIVO_MINORITARIO = 3_641_475; // 1 de los 15 ⇒ "0,0036" — el valor que la HU-077 congeló
 
 /** El subárbol del componente de cierre, y NADA más del documento (ver la cabecera). */
 function subarbolDelCierre(): HTMLElement {
@@ -81,11 +89,18 @@ function remesa(overrides: Partial<RemittanceState> = {}): RemittanceState {
 }
 
 describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de al lado", () => {
-  it("muestra 0,0036 y NO muestra ninguna de las siete cadenas equivocadas", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
-    const card = within(subarbolDelCierre());
-
-    expect(card.getByText(/0,0036/)).toBeInTheDocument();
+  it("T-079-D1: muestra la cifra QUE LA CADENA DEVOLVIÓ y ninguna de las cadenas equivocadas", async () => {
+    render(
+      <CloseEscrowAction
+        remittanceId="rem-1"
+        sender={sender}
+        close={useCase()}
+        explainer="own"
+        rent={new FakeSolanaRentReader(PAR_VIVO_MAYORITARIO)}
+      />,
+    );
+    const card = within(await screen.findByText(/0,0040/));
+    expect(card).toBeDefined();
 
     const texto = subarbolDelCierre().textContent ?? "";
     // ⚠️ QUÉ CUBRE ESTA LISTA Y QUÉ NO — la versión corregida de una frase que afirmaba de más
@@ -116,7 +131,18 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
     //   · "0,0084" / "0,0085" son la suma con el índice sobre el total NUEVO (3.641.475 + 4.774.560 =
     //     8.416.035), floor y ceil. Las viejas "0,0087"/"0,0088" son esa misma suma sobre el total
     //     viejo, y también se conservan.
-    expect(texto).not.toContain("0,0040"); // 🔴 el valor de MAINNET del lado que se muestra: EL DEFECTO
+    // 🔴 HU-079 — LA LISTA SE RE-DERIVÓ OTRA VEZ, Y "0,0040" TUVO QUE SALIR DE ELLA. No es un
+    // ablandamiento y conviene decir exactamente por qué: "0,0040" era el defecto de la HU-077 —el
+    // valor de MAINNET congelado en el lado que se muestra— y hoy es LA RESPUESTA CORRECTA para 14 de
+    // los 15 escrows vivos, que es justo lo que este fixture monta. Una cadena no puede estar a la vez
+    // prohibida y ser lo que la pantalla debe decir. Lo que reemplaza esa cobertura, y es más fuerte,
+    // es el `it` de abajo: con el OTRO par vivo la pantalla dice "0,0036" y "0,0040" NO aparece — o
+    // sea que ahora se vigila la DEPENDENCIA (dos entradas, dos salidas) y no una constante.
+    //   · Entra "0,0036": el valor que la HU-077 congeló. Con la cifra leída del parámetro, verlo acá
+    //     con el par MAYORITARIO significa que alguien volvió a congelarla.
+    //   · Entra "0,0034": el floor del `EscrowIndex` de devnet HOY (3.484.880) ⇒ sumar el índice.
+    expect(texto).not.toContain("0,0036"); // 🔴 el valor que la 077 congeló, ahora prohibido como literal
+    expect(texto).not.toContain("0,0034"); // floor del EscrowIndex de devnet hoy ⇒ se sumó el índice
     expect(texto).not.toContain("0,0037"); // ceil del alquiler que vuelve (formateador equivocado)
     expect(texto).not.toContain("0,0041"); // ceil del valor de mainnet, y antes también el umbral
     expect(texto).not.toContain("0,0048"); // ceil del alquiler del EscrowIndex
@@ -130,7 +156,7 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
   });
 
   it("nombra LAS DOS cuentas que se cierran, no 'tu alquiler' a secas (CD-3)", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" rent={new FakeSolanaRentReader(PAR_VIVO_MAYORITARIO)} />);
     const texto = subarbolDelCierre().textContent ?? "";
     expect(texto).toContain("dos cuentas");
     expect(texto).toContain("la del contrato");
@@ -138,7 +164,7 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
   });
 
   it("menciona APARTE la tercera cuenta que NO se cierra y cuyo depósito no vuelve", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" rent={new FakeSolanaRentReader(PAR_VIVO_MAYORITARIO)} />);
     const texto = subarbolDelCierre().textContent ?? "";
     expect(texto).toContain("tercera cuenta");
     expect(texto).toContain("índice");
@@ -151,22 +177,72 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
   it.each(["discovery", "remittance"] as const)(
     "voz %s: NO promete un neto, dice que hay comisión y que no sabemos cuánto (CD-3)",
     (voice) => {
-      const { body } = escrowRentExplainer(voice);
+      const { body } = escrowRentExplainer(voice, { status: "known", lamports: PAR_VIVO_MINORITARIO });
       expect(body).toContain("comisión");
       expect(body).toContain("no lo sabemos de antemano");
       // Y las dos nombran LAS DOS cuentas y la cifra del floor, que son hechos del mecanismo.
       expect(body).toContain("la que guardó tus USDC");
-      expect(body).toContain("0,0036");
+      expect(body).toContain("0,0036"); // el floor del par que se le PASÓ, no una constante del módulo
     },
   );
 
   // 🔴 El hallazgo, clavado en la función y no sólo en la pantalla: la voz de la PUERTA no puede
   // afirmar nada sobre un envío, porque cuando se monta todavía no se buscó ninguno.
   it("la voz 'discovery' no afirma que ningún envío haya terminado; la 'remittance' sí puede", () => {
-    expect(escrowRentExplainer("discovery").body).not.toContain("Este envío ya terminó");
-    expect(escrowRentExplainer("discovery").body).not.toContain("de ese envío");
+    expect(escrowRentExplainer("discovery", { status: "no-escrow" }).body).not.toContain("Este envío ya terminó");
+    expect(escrowRentExplainer("discovery", { status: "no-escrow" }).body).not.toContain("de ese envío");
     // Control positivo: la afirmación existe y vive donde SÍ hay un envío elegido.
-    expect(escrowRentExplainer("remittance").body).toContain("Este envío ya terminó");
+    expect(escrowRentExplainer("remittance", { status: "unknown" }).body).toContain("Este envío ya terminó");
+  });
+
+  // 🔴 T-079-D1 (2ª mitad) — LA DEPENDENCIA, EN LA PANTALLA Y NO SÓLO EN LA FUNCIÓN. Es lo que
+  // reemplaza —con más fuerza— al `not.toContain("0,0040")` que la lista de ausencias tuvo que soltar:
+  // el MISMO componente, con dos lecturas distintas, pinta dos cifras distintas. Ninguna constante
+  // congelada, de ningún valor, puede pasar los dos `it` a la vez.
+  it("T-079-D1: con el OTRO par vivo la pantalla dice 0,0036, y 0,0040 NO aparece", async () => {
+    render(
+      <CloseEscrowAction
+        remittanceId="rem-1"
+        sender={sender}
+        close={useCase()}
+        explainer="own"
+        rent={new FakeSolanaRentReader(PAR_VIVO_MINORITARIO)}
+      />,
+    );
+    await screen.findByText(/0,0036/);
+    const texto = subarbolDelCierre().textContent ?? "";
+    expect(texto).toContain("0,0036");
+    expect(texto).not.toContain("0,0040"); // ⛔ la cifra del OTRO par: acá sería un valor congelado
+  });
+
+  // 🔴 T-079-D2 — EL `it` QUE ATACA `CD-079-4` DE FRENTE. Con el lector que RECHAZA, la tarjeta NO
+  // muestra NINGUNA cifra y dice la frase de `unknown`. ⛔ Un fallback a un literal en el `catch` del
+  // efecto pondría acá una cifra con cara de dato y la pantalla se vería NORMAL — el fail-open de esta
+  // HU no es una excepción visible, es una promesa silenciosa de más.
+  it("T-079-D2: con el lector que RECHAZA no sale ninguna cifra, y se dice cuál es el hecho", async () => {
+    render(
+      <CloseEscrowAction
+        remittanceId="rem-1"
+        sender={sender}
+        close={useCase()}
+        explainer="own"
+        rent={new FakeSolanaRentReader(PAR_VIVO_MAYORITARIO, "reject")}
+      />,
+    );
+    await screen.findByText(/no pudimos preguntarle a la red/);
+    const texto = subarbolDelCierre().textContent ?? "";
+    expect(texto).toMatch(/no pudimos preguntarle a la red/);
+    expect(texto).not.toMatch(/\d,\d{4}/); // ⛔ NINGUNA cifra de SOL, de ningún valor
+    expect(texto).not.toContain("depende de cada envío"); // ⛔ CD-079-5: no es el otro hecho
+  });
+
+  // Y el colaborador AUSENTE —no un fallo, sino un montaje que no lo cablea— cae en el MISMO estado
+  // `unknown`, nunca en un literal. Es el caso que un `?` en el container haría invisible.
+  it("T-079-D2b: sin lector cableado tampoco sale ninguna cifra", async () => {
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
+    const texto = (await screen.findByTestId("close-escrow-action")).textContent ?? "";
+    expect(texto).toMatch(/no pudimos preguntarle a la red/);
+    expect(texto).not.toMatch(/\d,\d{4}/);
   });
 });
 

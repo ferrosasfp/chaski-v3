@@ -6,7 +6,7 @@ import {
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada, mwaHumanError } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
-  ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS,
+  // ⛔ EN ESTA LÍNEA VIVÍA `ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS`. HU-079 la borró del árbol —la cifra la lee la cadena— y la línea se conserva VACÍA DE CÓDIGO a propósito, igual que la de `:14`: ~50 citas `flow-vm.ts:NN` de otros archivos apuntan más abajo y borrarla las corre a todas.
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT, SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT, // WKH-358/AC-7: EN ESTA LÍNEA, no en una nueva (50 citas ancladas debajo)
   formatLamportsAsSol,
   formatLamportsAsSolFloor,
@@ -389,12 +389,22 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
 /**
  * Qué recupera la persona al cerrar, en su idioma.
  *
- * 🔴 La cifra sale de `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)` —la constante del lado que RECIBE—, NUNCA de un literal.
- * Un "0,0036" escrito a mano es lo que permite que la constante y el copy diverjan sin que nada se
- * ponga rojo. Y el FLOOR no es un detalle de estilo: `formatLamportsAsSol` (ceil) devuelve "0,0037"
- * para este mismo valor, o sea que sobreestimaría 1,61 % lo que la persona cobra. HU-077: acá vivía la
- * constante SIN dirección, escrita al factor de mainnet (6960) — la pantalla prometía "0,0040" y la
- * cadena devolvía "0,0036", 360.525 lamports de sobre-promesa. ⛔ El identificador entero de su gemela del lado que COBRA (la que termina en `_CHARGED_LAMPORTS`) NO se escribe en este archivo ni en un comentario: T-077-2 lee este archivo como TEXTO y asserta que no aparece. Si ves ESE rojo, borralo de acá; no ablandes el test.
+ * 🔴 HU-079 · LA CIFRA SALE DEL PARÁMETRO, Y EL PARÁMETRO SALE DE LA CADENA. Antes salía de una
+ * constante de este repo, y ESO fue el defecto, no su valor: la HU-077 la corrigió el 2026-09-03 y al
+ * día siguiente la cadena movió la tarifa en las DOS redes, sin un solo commit en el medio ⇒ el evento
+ * que rompe el número es de CALENDARIO, y ningún guard atado a `npm test` puede ponerse rojo un día en
+ * que nadie corre `npm test`. ⛔ PROHIBIDO que vuelva a salir de un literal, de una constante de módulo
+ * o de una fórmula sobre literales (CD-079-1): un "0,0036" escrito a mano es lo que deja que la cadena
+ * y el copy diverjan sin que nada se ponga rojo. Lo vigila `T-079-D3`: dos entradas, dos salidas.
+ *
+ * 🔴 EL FLOOR NO ES ESTILO — Y YA NO ES UN PORCENTAJE. Acá decía que el ceil "sobreestimaría 1,61 %", y
+ * eso era una propiedad del valor congelado; con la cifra leída depende de cuál se leyó. Se afirma el
+ * MECANISMO: el ceil sobre-promete lo que la persona COBRA, y prometer de menos es el error barato.
+ *
+ * 🔴 TRES ESTADOS, Y NO SE COLAPSAN (CD-079-5). Con `unknown` y con `no-escrow` NO SALE NINGÚN DÍGITO
+ * DE MONTO: la degradación no es una cifra vieja —eso sería re-introducir el defecto, y encima
+ * invisible— sino una frase distinta, y son DOS porque son DOS hechos: "no llegamos a preguntarle a la
+ * red" no es "todavía no hay ningún envío del que hablar".
  *
  * Lo que este texto NO dice, a propósito:
  *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
@@ -402,39 +412,29 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
  *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
  *    que inyecta es una incógnita declarada del propio repo (`propina`, `solana-escrow-rent.ts:128`) y esta
  *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
+ *  · 🔴 Tampoco promete un valor para OTRO envío que no sea éste: el alquiler es de CADA par de cuentas
+ *    y quedó congelado el día en que se crearon. Medido en devnet el 2026-09-04, de los 15 escrows
+ *    vivos 14 devuelven 4.002.000 y 1 devuelve 3.641.475 ⇒ una cifra única para una LISTA es falsa.
  *
- * 🔴 POR QUÉ HAY DOS VOCES Y POR QUÉ EL PARÁMETRO NO TIENE DEFAULT (fix-pack CR/BLQ-BAJO-1). Este
- * texto tenía UN solo `body`, escrito en la voz de un envío concreto y ya terminado ("las dos cuentas
- * de ese envío", "Este envío ya terminó, así que se pueden cerrar"). Es correcto en `CloseEscrowAction`,
- * que recibe un `remittanceId`. Pero la PUERTA de descubrimiento lo monta antes de que exista ninguna
- * selección: ahí no hay envío del que hablar, y la frase afirmaba un hecho sobre una remesa que
- * todavía no se había buscado. Peor: cuando el descubrimiento fallaba, la pantalla quedaba diciendo
- * las dos cosas juntas, "Este envío ya terminó" y "no llegamos a preguntar".
- *
- * Por eso `voice` es OBLIGATORIO y no un booleano con default: un default elige por el call-site nuevo,
- * y el call-site nuevo es exactamente donde se coló este bug. Quien monte este texto tiene que decir si
- * ya tiene un envío o todavía no.
- *
- *  · "remittance" — hay UN envío elegido y ya terminado. Pasado, y afirma sobre él.
- *  · "discovery"  — todavía no hay ninguno. Presente general: describe el mecanismo y la CONDICIÓN
- *                   ("sólo se pueden cerrar las de un envío que ya terminó"), sin afirmar que la haya
- *                   cumplido nadie.
- *
- * Lo que NO cambia entre las dos, y es deliberado: la cifra, las dos cuentas nombradas, la comisión
- * declarada como desconocida y el `notRecovered`. Esos son hechos del mecanismo, no de un envío.
+ * 🔴 POR QUÉ HAY DOS VOCES Y POR QUÉ NINGUNO DE LOS DOS PARÁMETROS TIENE DEFAULT (fix-pack
+ * CR/BLQ-BAJO-1 el primero, HU-079 el segundo). Este texto tenía UN solo `body`, en la voz de un envío
+ * concreto y ya terminado: correcto en `CloseEscrowAction`, que recibe un `remittanceId`, pero la
+ * PUERTA de descubrimiento lo monta antes de que exista ninguna selección y ahí la frase afirmaba un
+ * hecho sobre una remesa que nadie había buscado. Un default elige por el call-site nuevo, y el
+ * call-site nuevo es exactamente donde se coló este bug LAS DOS VECES; `figura` sin default obliga a
+ * que cada call-site NOMBRE cuál de los tres hechos tiene, en vez de que `tsc` lo deje inventarlo.
+ *  · "remittance" — hay UN envío elegido y ya terminado, y afirma sobre él. · "discovery" — todavía no hay ninguno: describe el mecanismo y la CONDICIÓN, sin afirmar que la haya cumplido nadie.
  */
-export function escrowRentExplainer(voice: "discovery" | "remittance"): {
-  title: string;
-  body: string;
-  notRecovered: string;
-} {
-  const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS);
+export type EscrowRentFigure = { readonly status: "known"; readonly lamports: number } | { readonly status: "unknown" } | { readonly status: "no-escrow" }; // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe ~50 citas ancladas por número de acá para abajo. El tercer estado vive en la PRESENTACIÓN y no en el puerto a propósito: `no-escrow` es un hecho de la PANTALLA (la puerta de descubrimiento todavía no buscó nada), no de la cadena, y meterlo en el puerto dejaría que un adapter devolviera un valor que no puede medir.
+export function escrowRentExplainer(voice: "discovery" | "remittance", figura: EscrowRentFigure): { title: string; body: string; notRecovered: string } {
+  const monto = figura.status === "known" ? `${formatLamportsAsSolFloor(figura.lamports)} SOL tuyos` : "una parte de tu SOL"; // ⛔ el `known` es el ÚNICO que interpola un número
+  const salvedad = figura.status === "known" ? "" : figura.status === "unknown" ? ", pero no pudimos preguntarle a la red cuánto es exactamente" : ", y cuánto exactamente depende de cada envío"; // ⛔ CD-079-5: dos frases porque son dos hechos
   return {
     title: "Recuperá tu depósito de red",
     body:
       voice === "remittance"
-        ? `Cuando enviaste, Solana retuvo ${monto} SOL tuyos para mantener abiertas las dos cuentas de ese envío: la del contrato y la que guardó tus USDC. Ese depósito es tuyo y vuelve a tu billetera al cerrarlas. Este envío ya terminó, así que se pueden cerrar. Vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`
-        : `Cada envío deja abiertas dos cuentas en Solana, la del contrato y la que guardó tus USDC, y por mantenerlas la red retiene ${monto} SOL tuyos. Ese depósito es tuyo y vuelve a tu billetera cuando esas cuentas se cierran, y sólo se pueden cerrar las de un envío que ya terminó. Por cada uno que cierres vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`,
+        ? `Cuando enviaste, Solana retuvo ${monto} para mantener abiertas las dos cuentas de ese envío: la del contrato y la que guardó tus USDC. Ese depósito es tuyo y vuelve a tu billetera al cerrarlas${salvedad}. Este envío ya terminó, así que se pueden cerrar. Vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`
+        : `Cada envío deja abiertas dos cuentas en Solana, la del contrato y la que guardó tus USDC, y por mantenerlas la red retiene ${monto}. Ese depósito es tuyo y vuelve a tu billetera cuando esas cuentas se cierran, y sólo se pueden cerrar las de un envío que ya terminó${salvedad}. Por cada uno que cierres vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`,
     notRecovered:
       "Hay una tercera cuenta, el índice de tu billetera, que no se cierra con esto y cuyo depósito no vuelve. Es una sola vez por billetera, no una por envío.",
   };

@@ -1,3 +1,4 @@
+import type { SolanaNewDepositRent } from "./ports"; // HU-079. ⚠️ ESTA LÍNEA SÍ CORRE TODAS LAS DE ABAJO EN UNO, y va igual: este archivo perdió 68 líneas en la misma HU (se borraron seis constantes), así que sus citas por número había que re-derivarlas de todos modos y no había ningún Δ0 que preservar. Las ancladas las re-derivó `citas-ancladas.test.ts`; las SUELTAS no las mira nadie, y eso queda dicho.
 // De dónde sale el SOL que el remitente necesita para depositar, y por qué el depósito NO es gasless
 // para él.
 //
@@ -166,6 +167,14 @@
  * alquiler no puede estar en lo que `close` devuelve siempre. Que ninguna instrucción del programa la
  * cierre es lectura del RUST, no del IDL: el IDL no expresa las constraints `close = ...` de Anchor.
  * ⇒ el copy de "cuánto recuperás al cerrar" NO cambia por esta constante.
+ *
+ * 🔴 HU-079 · QUÉ ES ESTE NÚMERO AHORA: un RESPALDO, no el valor vigente. Δ0 en su valor. Desde HU-079
+ * el umbral se LEE de la cadena (`senderMinLamportsForDeposit`, `:241`) y esto es lo que se usa cuando
+ * la lectura no ocurre. ⛔ CD-079-2 — es un literal de los ILEGÍTIMOS: describe una tarifa que la
+ * cadena mueve SOLA, no una propiedad del programa desplegado, así que ningún guard atado a `npm test`
+ * puede cazarlo cuando envejezca. Medido el 2026-09-04: devnet pide 3.484.880 para esta misma cuenta y
+ * mainnet 4.344.438, o sea que 4.774.560 ya está por ENCIMA de las dos ⇒ pide de más, que del lado que
+ * PIDE es el error gratis. El día que alguna cadena lo pase, este respaldo sub-pide en silencio.
  */
 export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
 
@@ -173,8 +182,12 @@ export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
  *  COBRABA 6960: el subtotal de arriba. Se escribe como la MEDICIÓN y no como la suma de sus partes a
  *  propósito — son dos fuentes independientes del mismo número, y hay un test que verifica que coinciden
  *  con la suma de sus hojas. 🔴 HU-079: esas hojas SE BORRARON y este número se queda, ahora como lo
- *  que es — un RESPALDO: ver su renglón en el bloque de arriba y en (`senderMinLamportsForDeposit`,
- *  `:301`), que es quien lo usa cuando la lectura de cadena no ocurre. */
+ *  que es — un RESPALDO: ver su renglón en el bloque de arriba y (`senderMinLamportsForDeposit`,
+ *  `:240`), que es quien lo usa cuando la lectura de cadena no ocurre.
+ *  ⛔ CD-079-2 — literal de los ILEGÍTIMOS, igual que su vecino: es una tarifa que la cadena mueve
+ *  sola. Δ0 en su valor, y por la misma razón: es el máximo histórico medido, así que degradar a él
+ *  pide de MÁS. Medido el 2026-09-04, el par de cuentas cuesta 2.921.000 en devnet y 3.641.475 en
+ *  mainnet ⇒ este 4.002.000 está por encima de los dos. */
 const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
 
 /** La comisión que el REFUND le va a sacar al sender después, y que el umbral tiene que dejarle
@@ -186,11 +199,54 @@ const REFUND_FEE_ALLOWANCE_LAMPORTS = 5_000 + 75_000;
  *  ES", arriba. Es el mismo que ya tenía el umbral anterior. */
 const ROUNDING_UP_LAMPORTS = 18_000;
 
+/**
+ * 🔴 EL RESPALDO, y ya no el umbral. Conserva su VALOR (8.874.560) y sus tres pines: es lo que se pide
+ * cuando la cadena NO se pudo leer. Sigue siendo la suma de los mismos cuatro sumandos.
+ *
+ * ⛔ CD-079-2 — QUÉ CLASE DE LITERAL ES: de los que NO se pueden atar al gate. Sus dos sumandos de
+ * alquiler son una tarifa que la cadena mueve SOLA, así que este número describe el 2026-09-03 y nada
+ * más. Se queda por una razón y sólo una: es la degradación del lado que PIDE, y ahí la dirección del
+ * error es la contraria a la de la pantalla — pedir de más deja a alguien trabado (molesto,
+ * reversible), pedir de menos deja pasar una firma que la cadena REVIERTE por saldo. Como es el máximo
+ * histórico medido, degradar a él pide de MÁS. Ver `CD-079-4`.
+ */
 export const SENDER_MIN_LAMPORTS_FOR_DEPOSIT =
   MEASURED_FIRST_DEPOSIT_LAMPORTS +
   REFUND_FEE_ALLOWANCE_LAMPORTS +
   ROUNDING_UP_LAMPORTS +
   ESCROW_INDEX_RENT_LAMPORTS;
+
+/**
+ * 🔴 CUÁNTO SOL TIENE QUE TENER EL REMITENTE PARA DEPOSITAR, **preguntado a la cadena** en vez de
+ * escrito acá. Es la mitad del arreglo de HU-079 que le cuesta plata a alguien si se hace mal.
+ *
+ * 🔴 LA ASIMETRÍA, QUE ES TODA LA RAZÓN DE QUE ESTA FUNCIÓN EXISTA. La dirección del error de este
+ * número es la CONTRARIA a la de la cifra que se muestra:
+ *   · la cadena BAJA (lo que pasó el 2026-09-04) ⇒ un umbral congelado pide de MÁS. Es seguro y sólo
+ *     molesto: hoy el literal pide 8.874.560 y devnet necesita 6.503.880, o sea 2.370.680 lamports de
+ *     más (0,0024 SOL), y alguien con saldo suficiente queda bloqueado sin motivo.
+ *   · 🔴 la cadena SUBE por encima de 6960 ⇒ un umbral congelado pide de MENOS, el guard deja pasar,
+ *     la persona firma, y la transacción REVIERTE en cadena por saldo. Es la única dirección que le
+ *     cuesta algo real a alguien, y hoy estamos del lado seguro POR CASUALIDAD: 6960 fue el máximo
+ *     histórico, no una cota, y nada impide que mañana el factor sea 7500. Lo mide `T-079-T4`.
+ *
+ * ⛔ `unknown` ⇒ el RESPALDO de acá arriba, NUNCA cero y NUNCA el par sin el índice (`CD-079-4`). Y
+ * ⛔ NUNCA el número del lado que RECIBE: ése es `CD-079-3`, y hoy es imposible por construcción
+ * porque el lado que recibe ya no tiene ninguna constante.
+ *
+ * ⚠️ El índice se suma SIEMPRE, aunque la cuenta `escrow_index` ya exista y ese depósito no se vuelva
+ * a cobrar. Es la misma decisión que ya tenía el literal y esta HU no la revisa: pedir de más es el
+ * error gratis de este lado.
+ */
+export function senderMinLamportsForDeposit(rent: SolanaNewDepositRent): number {
+  if (rent.status !== "known") return SENDER_MIN_LAMPORTS_FOR_DEPOSIT; // el respaldo: pide de MÁS
+  return (
+    rent.escrowPairLamports +
+    REFUND_FEE_ALLOWANCE_LAMPORTS +
+    ROUNDING_UP_LAMPORTS +
+    rent.escrowIndexLamports
+  );
+}
 
 // ── HU-079 · EL ALQUILER DEL LADO QUE SE DEVUELVE YA NO VIVE ACÁ ───────────────────────────────────
 //
@@ -228,7 +284,7 @@ export const SENDER_MIN_LAMPORTS_FOR_DEPOSIT =
 
 /** 5.000 lamports por firma. Fuente: `:64-69` — el depósito tiene 2 firmas y midió 10.000 en cadena.
  *  La tx de `close` tiene UNA sola (el sender es el único signer). Lo que este número NO cubre: la
- *  propina que inyecta la billetera, que es una incógnita declarada (`propina`, `:128`) y que `close` tampoco
+ *  propina que inyecta la billetera, que es una incógnita declarada (`propina`, `:129`) y que `close` tampoco
  *  acota, porque no declara ComputeBudget. Por eso el copy no promete un neto. */
 export const SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS = 5_000;
 
@@ -268,7 +324,7 @@ export function formatLamportsAsSol(lamports: number): string {
  * de estilo, depende de si el número es algo que se PIDE o algo que se RECIBE, y son dos decisiones
  * distintas que conviene no poder mezclar en un call-site.
  *   · `formatLamportsAsSol` redondea ARRIBA porque le dice a alguien cuánto cargar, y pedir de más es
- *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:259`).
+ *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:315`).
  *   · Ésta redondea ABAJO porque el número es lo que la persona va a COBRAR, y redondear hacia arriba
  *     lo que alguien va a cobrar es prometer de más.
  *
@@ -344,7 +400,22 @@ const WALLET_TIP_ALLOWANCE_LAMPORTS = 75_000;
  *
  *  ⛔ LO QUE NO VUELVE: este alquiler NO se recupera salvo que alguien emita un `nonceWithdraw`, y esta
  *  HU NO lo implementa. Son 0,00145 SOL por remitente, UNA sola vez, que quedan bloqueados en su propia
- *  cuenta de nonce. El remitente los puede recuperar cuando quiera; Chaski no le ofrece el botón. */
+ *  cuenta de nonce. El remitente los puede recuperar cuando quiera; Chaski no le ofrece el botón.
+ *
+ *  🔴 HU-079 · SU DIRECCIÓN Y SU PODREDUMBRE, DECLARADAS. Δ0 en el valor: esta HU ⛔ NO lo toca, y eso
+ *  es una decisión con fecha de vencimiento, no un veredicto de que esté bien.
+ *  · QUÉ CLASE DE LITERAL ES (`CD-079-2`): de los ILEGÍTIMOS. Describe una tarifa que la cadena mueve
+ *    SOLA, no una propiedad del programa desplegado, así que ningún guard atado a `npm test` puede
+ *    ponerse rojo el día que envejezca — y ese día es de CALENDARIO. Entre el 2026-09-03 y el
+ *    2026-09-04 la tarifa se movió en las DOS redes sin un solo commit en el medio.
+ *  · 🔴 SU DIRECCIÓN ES LA PELIGROSA, y es lo que lo separa del respaldo del umbral: este número no se
+ *    compara, se GASTA — `preparacion-por-enlace.ts:366` FONDEA con él una cuenta en cadena. Si la
+ *    cadena SUBE por encima de lo escrito, la cuenta queda SUB-FONDEADA y la transacción falla.
+ *  · HOY ESTÁ DEL LADO SEGURO, medido el 2026-09-04: `getMinimumBalanceForRentExemption(80)` da
+ *    1.056.640 en devnet y 1.317.264 en mainnet, y acá hay 1.447.680 ⇒ por encima de las dos. Del lado
+ *    seguro POR CASUALIDAD, igual que lo estaba el umbral: no hay ninguna cota que lo garantice.
+ *  · POR QUÉ QUEDA AFUERA IGUAL: tocar el camino de enlace profundo + durable nonce en el mismo diff
+ *    mezcla dos money-paths con historias de fallo distintas. ⇒ HU `080`. */
 export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_680;
 
 /** El umbral de SOL del camino por ENLACE PROFUNDO.
@@ -364,7 +435,15 @@ export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_680;
  *  por la MISMA razón que el punto 4 de `:120-125`: un umbral condicional obliga a que la lectura del
  *  guard y la de la construcción coincidan, y si divergen la tx REVIERTE EN CADENA. Pedir de más a
  *  quien ya tiene la cuenta cuesta que un caso borde vea un mensaje de saldo insuficiente; pedir de
- *  menos cuesta una transacción revertida con el escrow a medio crear. */
+ *  menos cuesta una transacción revertida con el escrow a medio crear.
+ *
+ *  🔴 HU-079 · SU DIRECCIÓN Y SU PODREDUMBRE, DECLARADAS. Δ0 en el valor. Hereda el problema de
+ *  (`NONCE_ACCOUNT_RENT_LAMPORTS`, `:419`), que es uno de sus sumandos, y le agrega el suyo: los otros
+ *  dos sumandos —la comisión de firma y la propina— SÍ son literales legítimos por `CD-079-2` (no los
+ *  mueve la cadena sola), pero el del alquiler no. Es un umbral, o sea que se COMPARA y no se gasta, y
+ *  por eso su dirección de error es la misma que la del umbral inyectado: si la cadena sube, pide de
+ *  MENOS y deja pasar una firma que revierte. ⛔ Esta HU ⛔ NO lo lee de la cadena, por la misma razón
+ *  de alcance que su sumando ⇒ HU `080`. */
 export const SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT =
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT +
   NONCE_ACCOUNT_RENT_LAMPORTS +

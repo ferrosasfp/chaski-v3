@@ -410,7 +410,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
  *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
  *  · No suma ni nombra el `EscrowIndex` en la cifra. Lo menciona aparte, como lo que NO vuelve.
  *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
- *    que inyecta es una incógnita declarada del propio repo (`propina`, `solana-escrow-rent.ts:128`) y esta
+ *    que inyecta es una incógnita declarada del propio repo (`propina`, `solana-escrow-rent.ts:129`) y esta
  *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
  *  · 🔴 Tampoco promete un valor para OTRO envío que no sea éste: el alquiler es de CADA par de cuentas
  *    y quedó congelado el día en que se crearon. Medido en devnet el 2026-09-04, de los 15 escrows
@@ -659,7 +659,7 @@ export function humanError(code: string): string { const porEnlace = copyDeEnlac
   // comisión del refund: ésa la paga el sender (`refundEscrow` fija `tx.feePayer = senderPk`), y es
   // parte de lo que se le está pidiendo que cargue. El texto ahora dice cuál de las dos es cuál.
   if (code.includes("solana_sender_sol_insufficient"))
-    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL. La comisión de red del depósito la pagamos nosotros; de tu wallet salen el alquiler de las cuentas del escrow y la comisión de la transacción con la que podrías recuperar tus USDC. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
+    return `Te falta SOL en la wallet: con ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL te alcanza seguro, y puede que haga falta menos: cuánto exactamente lo decide la red en el momento. La comisión de red del depósito la pagamos nosotros; de tu wallet salen el alquiler de las cuentas del escrow y la comisión de la transacción con la que podrías recuperar tus USDC. Cargá SOL y volvé a intentar: no se movió ningún USDC.`; // 🔴 HU-079, EN ESTA MISMA LÍNEA (Δ0). ACÁ DECÍA «necesitás AL MENOS X» Y PASÓ A SER FALSO: desde HU-079 el umbral que compara el guard se LEE de la cadena (`senderMinLamportsForDeposit`, `../application/solana-escrow-rent.ts:241`) y hoy en devnet da 6.503.880, o sea MENOS que este número. ⛔ Esta función recibe un `code: string` y nada más, así que no se le puede pasar la lectura sin tocar sus ~30 call-sites; usa el RESPALDO y LO DICE — «te alcanza seguro» es verdadero para una cota superior, «al menos» no lo era. Pedir de más es el error gratis de este lado (`CD-079-4`); prometer un mínimo que no es el mínimo es acusar de saldo insuficiente a alguien que sí puede pagar.
   // Nuestro servidor no pudo consultar el registro de direcciones preparadas y cortó ANTES de
   // reenviar la transacción (route.ts:126-133, antes del fetch de la línea 156). Sin frase propia
   // caía en el default "Algo salió mal", que no dice ni que la plata está quieta ni que reintentar

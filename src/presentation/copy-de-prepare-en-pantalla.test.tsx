@@ -35,7 +35,7 @@ import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
   FakePruebaDePosesionPorEnlace,
@@ -105,7 +105,7 @@ async function runPrepareFailure(enumDeLaRoute: string): Promise<RemittanceState
       gateway: new FakeSolanaSettlementGateway(),
       probe: new FakeSolanaEscrowDepositProbe("not_deposited"),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(),
-      pop: new FakePruebaDePosesionPorEnlace(),
+      pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
     }).execute({ remittanceId: "rem-1" , hrefDeLaVuelta: "https://chaski.test/enviar" }),
   );
   return out.snapshot;

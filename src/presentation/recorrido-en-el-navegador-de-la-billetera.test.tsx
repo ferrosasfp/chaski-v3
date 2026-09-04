@@ -45,7 +45,7 @@ import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import type { FirmaPorEnlace } from "../infrastructure/solana/deeplink/firma-por-enlace";
 import { CLAVE_ELECCION } from "../infrastructure/solana/deeplink/conexion";
-import type { PruebaDePosesionPorEnlace, PruebaPorEnlace } from "../application/ports";
+import type { PruebaDePosesionPorEnlace, PruebaPorEnlace, SolanaRentReader } from "../application/ports";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import {
   SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT,
@@ -57,7 +57,7 @@ import {
   FAKE_SOLANA_BENEFICIARY,
   FakeKycGateway,
   FakeKycStore,
-  FakePruebaDePosesionPorEnlace,
+  FakePruebaDePosesionPorEnlace, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeRefundGateway,
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
@@ -258,7 +258,7 @@ const quote: Quote = {
 };
 
 /** Una remesa cotizada y con el KYC aplicado: el estado desde el que `ConfirmAndSend` corre entero.
- *  Copiado de (`seedQuoted`, `../application/use-cases/confirm-and-send.sol-balance.test.ts:54`). */
+ *  Copiado de (`seedQuoted`, `../application/use-cases/confirm-and-send.sol-balance.test.ts:55`). */
 async function sembrarCotizada(repo: InMemoryRepo): Promise<string> {
   const r = Remittance.create("r-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(quote, T0);
@@ -277,14 +277,14 @@ function armarEnvio(p: {
   prepare: FakeSolanaPayoutPrepareGateway;
   gateway: FakeSolanaSettlementGateway;
   senderBalance: FakeSolanaSenderSolBalanceProbe;
-  pop: PruebaDePosesionPorEnlace;
+  pop: PruebaDePosesionPorEnlace; rent?: SolanaRentReader; // HU-079: OPCIONAL en ESTE helper de test (no en el Container, donde va sin `?` por CD-14). Su default es el doble en modo `unknown`, que deja el umbral en el RESPALDO 8.874.560 — o sea el valor que los `it` de este archivo ya asumían y siguen midiendo.
 }): ConfirmAndSend {
   return new ConfirmAndSend(p.wallet, p.repo, new FixedClock(), new FakeRefundGateway("no-receipt"), {
     prepare: p.prepare,
     gateway: p.gateway,
     probe: new FakeSolanaEscrowDepositProbe(),
     senderBalance: p.senderBalance,
-    pop: p.pop,
+    pop: p.pop, rent: p.rent ?? new FakeSolanaRentReader(4_002_000, "unknown"), // HU-079
   });
 }
 
@@ -525,7 +525,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
         prepare: new FakeSolanaPayoutPrepareGateway(),
         gateway: new FakeSolanaSettlementGateway(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
-        pop: new FakePruebaDePosesionPorEnlace(),
+        pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
       }).execute({ remittanceId: idA , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     );
     expect(
@@ -545,7 +545,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
         prepare: new FakeSolanaPayoutPrepareGateway(),
         gateway: new FakeSolanaSettlementGateway(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT - 1),
-        pop: new FakePruebaDePosesionPorEnlace(),
+        pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
       }).execute({ remittanceId: idB , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     );
     expect(salidaB.snapshot.status, "un lamport por debajo del umbral igual pasó: el guard no corta").toBe(

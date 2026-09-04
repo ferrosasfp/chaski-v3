@@ -38,6 +38,7 @@ import {
   NONCE_ACCOUNT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  senderMinLamportsForDeposit,
   SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS,
   WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS,
   formatLamportsAsSol,
@@ -174,7 +175,7 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
   // 4.002.000 fue medido sobre un depósito COBRADO al factor 6960, así que su contraparte correcta es
   // el lado que COBRA. Mismo operador `toBe`, misma fuerza, otra constante. Un `>=` acá dejaría pasar
   // cualquier valor por encima, que es la forma de aserción que este archivo ya cazó tautológica.
-  // ⛔ (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:53`) sigue escrito A MANO: importarlo del módulo que se
+  // ⛔ (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:54`) sigue escrito A MANO: importarlo del módulo que se
   // vigila convertiría esto en la constante mirándose al espejo.
   // 🔴 RE-APUNTADO POR HU-079. Su contraparte era `ESCROW_DEPOSIT_RENT_CHARGED_` + `LAMPORTS`, que se
   // borró. La contraparte NUEVA es mejor y no peor: el saldo REAL, leído cuenta por cuenta con
@@ -280,7 +281,7 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
   // pone rojo y el número hay que re-derivarlo.
   //
   // ⚠️ Y NO SE LE AGREGÓ UNA ASERCIÓN ARITMÉTICA, a propósito. Cualquier `expect` sobre el VALOR del
-  // alquiler acá sería una copia del pin que ya hace (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:186`), y
+  // alquiler acá sería una copia del pin que ya hace (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:187`), y
   // repetir un pin con otra redacción no agrega cobertura: agrega la ilusión de tenerla.
   it("la ix `close` declara `escrow_index` OPCIONAL: se puede cerrar sin esa cuenta", () => {
     const idl = escrowIdl as unknown as {
@@ -315,12 +316,84 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
   });
 });
 
+// ── HU-079 · EL UMBRAL SE LEE DE LA CADENA ─────────────────────────────────────────────────────────
+//
+// Los TRES pines viejos de 8.874.560 (los dos de acá arriba y el de `flow-vm.test.ts`) ⛔ NO se
+// borraron: siguen pinneando el RESPALDO, que conserva su valor. Si alguno se pone rojo, el respaldo
+// se movió y eso hay que mirarlo a mano.
+describe("HU-079: el umbral que se PIDE sale de la lectura de cadena, no de un literal", () => {
+  // 🔴 T-079-T2 — EL PIN DEL CAMINO, y es estrictamente MÁS FUERTE que los tres pines viejos. El viejo
+  // dice "la constante vale X", y eso lo pasa CUALQUIER constante que valga X. Éste dice "la FUNCIÓN,
+  // sobre la entrada conocida, sigue dando X", y eso sólo lo pasa la aritmética correcta.
+  //
+  // La entrada son los valores que la cadena devolvía el 2026-09-03, o sea los mismos cuatro sumandos
+  // con los que se derivó el literal: 4.002.000 + 80.000 + 18.000 + 4.774.560 = 8.874.560.
+  it("T-079-T2: con la lectura del 2026-09-03 la función devuelve EXACTAMENTE el literal viejo", () => {
+    expect(
+      senderMinLamportsForDeposit({
+        status: "known",
+        escrowPairLamports: 4_002_000,
+        escrowIndexLamports: 4_774_560,
+      }),
+    ).toBe(8_874_560);
+    // Y que ese 8.874.560 es el MISMO número que el respaldo, o sea que la función y el literal no se
+    // separaron en silencio sobre la entrada para la que el literal fue derivado.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(8_874_560);
+  });
+
+  // 🔴 T-079-T1 — Y HACEN FALTA LOS DOS `it`, no uno. `T-079-T2` NO mata al mutante "ignorá el
+  // argumento y devolvé el respaldo", porque sobre ESA entrada las dos ramas coinciden por
+  // construcción. Éste usa la lectura de devnet de HOY, donde las dos ramas difieren en 2.370.680.
+  it("T-079-T1: con la lectura de devnet del 2026-09-04 el umbral BAJA a 6.503.880", () => {
+    expect(
+      senderMinLamportsForDeposit({
+        status: "known",
+        escrowPairLamports: 2_921_000, // rent-exempt(154) + rent-exempt(165) en devnet, factor 5080
+        escrowIndexLamports: 3_484_880, // rent-exempt(558) en devnet
+      }),
+    ).toBe(6_503_880);
+    // El control que lo vuelve un test y no un pin: es DISTINTO del respaldo. Sin esto, un mutante que
+    // devolviera siempre el respaldo pasaría el `toBe` de arriba si los números coincidieran.
+    expect(6_503_880).not.toBe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    // Y la magnitud de lo que el literal pedía de más, que es gente con saldo suficiente trabada.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT - 6_503_880).toBe(2_370_680);
+  });
+
+  // 🔴 T-079-T4 — LA DIRECCIÓN QUE PIERDE PLATA, y es el `it` que el código de AYER no podía pasar.
+  // Con el umbral congelado, una cadena que SUBA deja el requisito por debajo de lo que hace falta: el
+  // guard deja pasar, la persona firma, y la transacción REVIERTE en cadena por saldo. Es la única
+  // dirección que le cuesta algo real a alguien, y hoy estábamos del lado seguro por casualidad —
+  // 6960 fue el máximo histórico, no una cota.
+  it("T-079-T4: si la cadena SUBE, el umbral sube con ella y NO se queda en el respaldo", () => {
+    const alta = senderMinLamportsForDeposit({
+      status: "known",
+      escrowPairLamports: 5_000_000,
+      escrowIndexLamports: 6_000_000,
+    });
+    expect(alta).toBe(11_098_000); // 5.000.000 + 80.000 + 18.000 + 6.000.000
+    // 🔴 LA ASERCIÓN QUE IMPORTA: por ENCIMA del respaldo. Con el literal el umbral se habría quedado
+    // en 8.874.560 y habría dejado pasar a alguien 2.223.440 lamports corto.
+    expect(alta).toBeGreaterThan(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+  });
+
+  // T-079-T3 — el `CD-079-4` del lado que PIDE: la lectura fallida degrada al respaldo, que pide de
+  // MÁS. ⛔ Nunca cero, y ⛔ nunca el par sin el índice.
+  it("T-079-T3: `unknown` cae al RESPALDO, y el respaldo pide de más, nunca de menos", () => {
+    expect(senderMinLamportsForDeposit({ status: "unknown" })).toBe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    expect(senderMinLamportsForDeposit({ status: "unknown" })).toBe(8_874_560);
+    // Y que el respaldo es MAYOR que lo que las dos cadenas piden hoy, o sea que degradar a él pide de
+    // más. Los dos números son lecturas del 2026-09-04, escritas a mano como oráculos.
+    expect(8_874_560).toBeGreaterThan(6_503_880); // devnet hoy
+    expect(8_874_560).toBeGreaterThan(8_083_913); // mainnet hoy: 3.641.475 + 80.000 + 18.000 + 4.344.438
+  });
+});
+
 describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar con el umbral", () => {
   /** El par de cuentas medido en devnet el 2026-09-03, leído cuenta por cuenta con
    *  `getAccountInfo` / `getTokenAccountsByOwner`:
    *    EscrowState `EyUXgVNLjYJ2Av8NayGH9q8aeKCsxtkPhYXQz8rVJJxA` = 1.785.906
    *    vault ATA   `H3LA8T3KhVjX8ap2cmNvJhs88nagroEskkMsz17bjdDY` = 1.855.569
-   *  ⛔ VA A MANO, igual que su hermana (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:53`) y por la misma razón:
+   *  ⛔ VA A MANO, igual que su hermana (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:54`) y por la misma razón:
    *  es una MEDICIÓN EN CADENA, o sea un oráculo independiente del módulo. Derivarla del módulo
    *  convertiría la aserción (1) de abajo en la constante mirándose al espejo. */
   const PAR_VIVO_MAYORITARIO_LAMPORTS = 4_002_000;
@@ -465,7 +538,7 @@ describe("el umbral del camino por enlace profundo (durable nonce)", () => {
   });
 
   it("los DOS `75_000` del archivo son el mismo valor (candado contra la deriva silenciosa)", () => {
-    // (`REFUND_FEE_ALLOWANCE_LAMPORTS`, `solana-escrow-rent.ts:183`) lleva `5_000 + 75_000` literales y NO se puede
+    // (`REFUND_FEE_ALLOWANCE_LAMPORTS`, `solana-escrow-rent.ts:196`) lleva `5_000 + 75_000` literales y NO se puede
     // reescribir para usar las constantes (se declara antes que ellas). Este assert es lo único que
     // impide que los dos 75.000 se separen sin que nada se ponga rojo.
     expect(WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS).toBe(75_000);

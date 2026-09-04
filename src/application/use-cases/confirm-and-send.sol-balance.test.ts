@@ -11,13 +11,14 @@
 // Los tres comportamientos se clavan por separado, y a propósito: sacar el chequeo, invertir el
 // comparador y hacer que un RPC caído bloquee ponen rojo tres tests DISTINTOS de este archivo.
 import { describe, expect, it } from "vitest";
+import type { SolanaRentReader } from "../ports"; // HU-079
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
   FakePruebaDePosesionPorEnlace,
@@ -67,6 +68,7 @@ function build(
   prepare: FakeSolanaPayoutPrepareGateway,
   gateway: FakeSolanaSettlementGateway,
   senderBalance: FakeSolanaSenderSolBalanceProbe,
+  rent: SolanaRentReader = new FakeSolanaRentReader(4_002_000, "unknown"), // HU-079: default `unknown` ⇒ el umbral queda en el RESPALDO, que es contra lo que los `it` de arriba ya median. Los `it` de T-079-T5 lo pasan explícito.
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
@@ -82,7 +84,7 @@ function build(
       gateway,
       probe: new FakeSolanaEscrowDepositProbe(),
       senderBalance,
-      pop: new FakePruebaDePosesionPorEnlace(), // WKH-359: `no-corresponde` por default = el camino inyectado (AC-8)
+      pop: new FakePruebaDePosesionPorEnlace(), rent, // WKH-359: `no-corresponde` por default = el camino inyectado (AC-8)
     },
   );
 }
@@ -199,5 +201,55 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     expect(out.snapshot.failureReason).not.toBe(SOLANA_SENDER_SOL_INSUFFICIENT);
     expect(out.snapshot.status).toBe("payout_submitted");
     expect(wallet.authorizeCalls).toHaveLength(1);
+  });
+});
+
+// ── HU-079 · T-079-T5 · EL UMBRAL LEÍDO, EN EL USE-CASE Y NO SÓLO EN LA FUNCIÓN ────────────────────
+//
+// 🔴 LA TERCERA ASERCIÓN ES LA QUE PRUEBA QUE ESTA HU LE SIRVE A ALGUIEN. Las dos primeras miden el
+// borde nuevo; la tercera monta a una persona con 8.874.559 lamports —uno menos que el respaldo— y
+// verifica que HOY, con la lectura de devnet, PASA. Antes de esta HU quedaba trabada con el mensaje de
+// "te falta SOL" teniendo 2.370.679 lamports MÁS de los que la cadena le iba a pedir.
+describe("T-079-T5: el guard compara contra la lectura, y eso libera a quien hoy queda trabado", () => {
+  /** La lectura de devnet del 2026-09-04 ⇒ umbral 2.921.000 + 80.000 + 18.000 + 3.484.880 = 6.503.880. */
+  const DEVNET_HOY = () => new FakeSolanaRentReader(4_002_000, "resolve", 2_921_000, 3_484_880);
+
+  async function corre(lamports: number) {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const id = await seedQuoted(repo);
+    const out = esperarListo(
+      await build(
+        repo,
+        wallet,
+        new FakeSolanaPayoutPrepareGateway(),
+        new FakeSolanaSettlementGateway(),
+        new FakeSolanaSenderSolBalanceProbe(lamports),
+        DEVNET_HOY(),
+      ).execute({ remittanceId: id, hrefDeLaVuelta: "https://chaski.test/enviar" }),
+    );
+    return { out, wallet };
+  }
+
+  it("un lamport por debajo del umbral LEÍDO ⇒ corta y refundea, sin pedir ninguna firma", async () => {
+    const { out, wallet } = await corre(6_503_879);
+    expect(out.snapshot.status).toBe("payout_failed");
+    expect(wallet.authorizeCalls, "no se le pidió la firma").toHaveLength(0);
+  });
+
+  it("exactamente el umbral LEÍDO ⇒ pasa (el umbral es lo que hace falta, no un extra)", async () => {
+    const { out, wallet } = await corre(6_503_880);
+    expect(out.snapshot.status).toBe("payout_submitted");
+    expect(wallet.authorizeCalls).toHaveLength(1);
+  });
+
+  // 🔴 ÉSTE. Con el literal, este saldo se rechazaba; con la lectura, pasa — y pasa porque la cadena
+  // de verdad pide menos, no porque el guard se haya ablandado.
+  it("un lamport por debajo del RESPALDO pero por encima del leído ⇒ PASA (hoy lo bloquearía)", async () => {
+    const { out, wallet } = await corre(8_874_559);
+    expect(8_874_559).toBeLessThan(SENDER_MIN_LAMPORTS_FOR_DEPOSIT); // el literal lo habría rechazado
+    expect(8_874_559).toBeGreaterThan(6_503_880); // y la cadena de hoy no lo necesita
+    expect(out.snapshot.status).toBe("payout_submitted");
+    expect(wallet.authorizeCalls, "sí se le pidió la firma").toHaveLength(1);
   });
 });

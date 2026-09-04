@@ -1253,3 +1253,69 @@ export interface SesionReader {
 export interface SesionRecorder {
   record(address: string, token: string): void;
 }
+
+// ── HU-079 · EL ALQUILER SE LEE, NO SE ESCRIBE ───────────────────────────────────────────────────
+//
+// Van ACÁ ABAJO, al final del archivo, por la razón que `:983-985` y `:1237-1239` ya dejaron escrita:
+// este archivo recibe citas ancladas por número y una inserción aguas arriba las corre a todas en
+// silencio. Su MOLDE es (`SolanaSenderSolBalance`, `:439`); de él se copia la FORMA, no el lugar.
+//
+// 🔴 POR QUÉ ESTE PUERTO EXISTE. La tarifa de alquiler de Solana la mueve LA CADENA, sola: entre el
+// 2026-09-03 y el 2026-09-04 devnet pasó de 6960 a 5080 lamports por byte-año y mainnet de 6960 a
+// 6333, sin un solo commit en el medio. Un literal describe bien lo que cambia con un DESPLIEGUE y
+// describe mal lo que cambia con el CALENDARIO: ningún guard atado a `npm test` puede ponerse rojo un
+// día en que nadie corre `npm test`. Por eso esta cifra no se escribe: se pregunta.
+//
+// 🔴 SON DOS MÉTODOS Y NO UNO, Y LA SEPARACIÓN ES POR PREGUNTA. `readNewDepositRent` es PROSPECTIVA
+// ("si deposito ahora, ¿cuánto inmoviliza la red?") y `readOpenEscrowRent` es RETROSPECTIVA ("mi
+// escrow ya abierto, ¿cuánto devuelve al cerrarse?"). Las dos respuestas son correctas y DISTINTAS al
+// mismo tiempo; cada docblock de acá abajo dice por qué. ⛔ PROHIBIDO usar una para contestar la otra:
+// usar la prospectiva para la retrospectiva promete de menos a 14 de los 15 escrows vivos, y usar la
+// retrospectiva para la prospectiva es el defecto que la HU-077 dejó en producción.
+
+/**
+ * Lo que devuelve el `close` de UN escrow YA ABIERTO: la suma de los saldos REALES de sus dos cuentas
+ * (`EscrowState` + la ATA del vault). Es exacto, no una estimación: son los lamports que esas dos
+ * cuentas TIENEN, leídos de la cadena, sin ninguna fórmula en el medio.
+ *
+ * ⛔ NO incluye el alquiler de `EscrowIndex` y no es un olvido. Lo que sostiene la exclusión, y es lo
+ * verificable: la ix `close` declara `escrow_index` como cuenta OPCIONAL en el IDL, así que existe un
+ * `close` válido que ni la recibe y su alquiler no puede estar en lo que `close` devuelve siempre. Que
+ * ninguna instrucción del programa cierre esa cuenta **no se pudo verificar** desde este repo: el IDL
+ * no expresa las constraints `close = ...` de Anchor. ⇒ el adapter suma DOS cuentas, nunca tres.
+ *
+ * `unknown` es "no pudimos preguntar", NO "no devuelve nada" y NO "devuelve cero" (misma disciplina que
+ * `SolanaSenderSolBalance`, `:439`). No es un `number | null` por la misma razón que allá: un `null`
+ * obliga a cada llamador a acordarse de qué significa, y ya vimos qué pasa cuando alguien lo lee como 0.
+ */
+export type SolanaOpenEscrowRent =
+  | { readonly status: "known"; readonly lamports: number }
+  | { readonly status: "unknown" };
+
+/**
+ * Lo que un depósito NUEVO va a inmovilizar HOY, preguntado a la cadena en la que la app está corriendo.
+ *
+ * 🔴 LOS DOS SUMANDOS VAN SEPARADOS Y NO PRE-SUMADOS, porque tienen consumidores distintos y sumarlos
+ * acá haría imposible separarlos después: `escrowPairLamports` (las dos cuentas que el `close`
+ * devuelve) es lo único que se le puede prometer a la persona como "esto lo recuperás";
+ * `escrowIndexLamports` se cobra en el depósito pero NO vuelve con el `close`, así que entra al umbral
+ * y NUNCA a una promesa de devolución. Un solo campo invitaría a prometer el índice.
+ */
+export type SolanaNewDepositRent =
+  | {
+      readonly status: "known";
+      readonly escrowPairLamports: number;
+      readonly escrowIndexLamports: number;
+    }
+  | { readonly status: "unknown" };
+
+/**
+ * El lector de alquiler. Las dos preguntas del bloque de arriba, cada una con su método.
+ *
+ * ⛔ PROHIBIDO agregarle un método que devuelva "el alquiler" a secas: la ambigüedad entre las dos
+ * preguntas ES el defecto que este puerto existe para hacer imposible de escribir.
+ */
+export interface SolanaRentReader {
+  readOpenEscrowRent(input: { sender: string; remittanceId: string }): Promise<SolanaOpenEscrowRent>;
+  readNewDepositRent(): Promise<SolanaNewDepositRent>;
+}

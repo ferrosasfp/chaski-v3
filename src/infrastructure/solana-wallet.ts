@@ -27,7 +27,7 @@ import type {
   SolanaRemittanceIdResolver, PruebaDePosesionPorEnlace, PruebaPorEnlace, // WKH-359: los DOS EN ESTA LÍNEA, no en dos nuevas — todas las citas ancladas a este archivo apuntan de `:188` para abajo y una línea nueva acá arriba las rota a todas (mismo motivo que WKH-349 y WKH-356, un par de líneas más abajo)
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
-  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, SolanaOpenEscrowRent, SolanaNewDepositRent, SolanaRentReader, // HU-079: LOS TRES EN ESTA LÍNEA, por lo mismo que dice el resto del renglón. // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -171,7 +171,7 @@ export class SolanaWalletAdapter
     SolanaCloseableEscrowLister,
     // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
     // bridge que sabe la respuesta ya es suyo.
-    ConnectedWalletProbe, SolanaEscrowChainStateReader, PruebaDePosesionPorEnlace // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
+    ConnectedWalletProbe, SolanaEscrowChainStateReader, PruebaDePosesionPorEnlace, SolanaRentReader // HU-079: EN ESTA LÍNEA. Cuánto alquiler inmoviliza y cuánto devuelve el `close` se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos. // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
 {
   private address: string | null = null;
 
@@ -890,7 +890,7 @@ export class SolanaWalletAdapter
     // de siempre. Mover la rama arriba del `tx.recentBlockhash` además rompe DT-10 por construcción (el
     // ancla se calcularía sobre una tx sin blockhash), y eso lo cazan los `it` de T-062-18.
     //
-    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono, Y SIGUE SIN ESTARLO DESPUÉS DE WKH-358. Eso es lo que esta actualización precisa, en las MISMAS 4 líneas (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-893=78]] citas ancladas por debajo): la ola 4 escribió quién enciende esta rama y quién la alimenta, así que ahora EXISTE un recorrido con el que se puede medir, y lo que no cambió es que nadie de este equipo lo corrió en un teléfono.
+    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono, Y SIGUE SIN ESTARLO DESPUÉS DE WKH-358. Eso es lo que esta actualización precisa, en las MISMAS 4 líneas (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-893=83]] citas ancladas por debajo): la ola 4 escribió quién enciende esta rama y quién la alimenta, así que ahora EXISTE un recorrido con el que se puede medir, y lo que no cambió es que nadie de este equipo lo corrió en un teléfono.
     // Siguen sin verificar, una por una: que la billetera vuelva al mismo origen · que el `localStorage` sobreviva al salto · que la transacción devuelta sea byte-idéntica a la enviada · y que el blockhash aguante el viaje de ida y vuelta (dos saltos a otra app, una persona leyendo, dos vueltas).
     // ⚠️ La CUARTA es la única que la ola 4 acota, y sólo para el depósito: el durable nonce le saca el reloj a los dos saltos que llevan plata, y el único salto que sigue compitiendo contra un blockhash es el de la CREACIÓN de la cuenta de nonce, donde no hay nada en riesgo (el encabezado de `./solana/nonce-duradero.ts` lo desarrolla). Las otras tres están intactas.
     // ⛔ PROHIBIDO convertir cualquiera de las cuatro en una afirmación del código sin el reporte del founder pegado al lado (CD-10). Su plan de medición vive en el expediente de la HU, no acá.
@@ -903,7 +903,7 @@ export class SolanaWalletAdapter
       if (entorno === null) throw new Error("deeplink_sin_memoria");
       const almacen = entorno.almacen;
 
-      // 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN Y EN LAS MISMAS 4 LÍNEAS (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=78]] citas ancladas por debajo —marcador verificado; decía 47, después 65, y las DOS veces se copió a la frase gemela de `:893`—). Acá decía «el `sender` … NUNCA del canal del enlace», sin calificar el camino, y esa mitad se volvió FALSA. El `sender` sigue saliendo de `this.getAddress()` (guard `:560-561`, sin cambios), pero `getAddress()` tiene ahora DOS fuentes y cuál se usa lo decide el gate (`caminoPorEnlace`, `:2239`):
+      // 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN Y EN LAS MISMAS 4 LÍNEAS (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=83]] citas ancladas por debajo —marcador verificado; decía 47, después 65, y las DOS veces se copió a la frase gemela de `:893`—). Acá decía «el `sender` … NUNCA del canal del enlace», sin calificar el camino, y esa mitad se volvió FALSA. El `sender` sigue saliendo de `this.getAddress()` (guard `:560-561`, sin cambios), pero `getAddress()` tiene ahora DOS fuentes y cuál se usa lo decide el gate (`caminoPorEnlace`, `:2239`):
       // · camino INYECTADO ⇒ el bridge, o sea FUERA del canal (y ahí esta rama ni corre: el mismo gate la apaga). · camino POR ENLACE ⇒ (`direccionDelViajeConectado`, `:2307`), que lee `Viaje.direccion`, o sea DENTRO del canal — y no hay alternativa: sin extensión el bridge está vacío.
       // ⇒ En el camino por enlace, el guard (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:691`) compara dos lecturas del MISMO disco: es COHERENCIA INTERNA, no una defensa. El corte que sí lo es está en (`live`, `../presentation/flow.tsx:506`) cruzado contra `rem.ownerAddress`, que escribe `startKyc` en el repo de remesas y que el canal del enlace no puede escribir; su residual (`ownerAddress == null` no dispara ⇒ un forjador del paso 1 puede dejar el depósito en un escrow que la víctima no puede cerrar) está escrito entero en el bloque de (`CD-11`, `./solana/deeplink/firma-por-enlace.ts:639`). Lo mide `T-065-CD11`. ⚠️ Y EL CRUCE ES TIME-OF-CHECK, NO FUENTE-INDEPENDIENTE (fix-pack · AR/BLQ-BAJO-4): en ESTE camino `rem.ownerAddress` lo escribió `startKyc` con la MISMA `Viaje.direccion` que acá se compara, así que un forjador anterior a `startKyc` compara A contra A. Lo que el cruce cierra de verdad es la ventana POSTERIOR a `startKyc`, cuando `ownerAddress` ya quedó congelado en el repo de remesas. La fuente-independiente real es un PoP por enlace (WKH-359), que no existe.
       // El `sender` va en su forma CANÓNICA: `senderPk.toBase58()` es el round-trip de `new PublicKey(...)`, que es exactamente lo que hace `canonicalizeAddress`. ⛔ NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas fabrica colisiones.
@@ -1473,7 +1473,7 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2478` ES
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2598` ES
       // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
       // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
@@ -2110,7 +2110,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:2478`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:2598`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
@@ -2135,7 +2135,7 @@ export class SolanaWalletAdapter
    * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
    * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
    * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
-   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2493`.
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2613`.
    *
    * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
    * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
@@ -2230,14 +2230,14 @@ export class SolanaWalletAdapter
    *  ⛔ POR QUÉ ESTO NO ES UNA FACTORY NI UN SEGUNDO ADAPTER, que es lo que parece la solución limpia.
    *  Una factory decidiría al construir el container (`getContainer`, `../composition/container.ts:265`,
    *  que corre UNA vez al montar) y la elección de la persona ocurre DESPUÉS: sería una decisión tomada
-   *  antes de que exista el dato. Y un segundo adapter duplicaría un archivo de [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas
-   *  con [[CENSO src/infrastructure/solana-wallet.ts entrantes=130]] citas ancladas entrantes (los dos ya envejecieron dos veces acá —«2247/85» ⇒ «2362/116»— y por eso desde el fix-pack del CR son MARCADORES que verifica `citas-ancladas.test.ts`, no cifras escritas a mano), con las dos instancias compartiendo el MISMO bridge y el MISMO disco.
+   *  antes de que exista el dato. Y un segundo adapter duplicaría un archivo de [[CENSO src/infrastructure/solana-wallet.ts lineas=2654]] líneas
+   *  con [[CENSO src/infrastructure/solana-wallet.ts entrantes=137]] citas ancladas entrantes (los dos ya envejecieron dos veces acá —«2247/85» ⇒ «2362/116»— y por eso desde el fix-pack del CR son MARCADORES que verifica `citas-ancladas.test.ts`, no cifras escritas a mano), con las dos instancias compartiendo el MISMO bridge y el MISMO disco.
    *
    *  🔴 ACÁ DECÍA «NO LEE `deeplinkEnabled()`, y no es un olvido», Y ERA EL BUG (AR/BLQ-MED-1, en las MISMAS 4 líneas para no correr las 47 citas de más abajo). El argumento de esa frase era: *"con la bandera apagada nadie puede elegir, así que la condición 1 no se cumple"*. **Es falso para un dispositivo que YA eligió**: `CLAVE_ELECCION` no expira (`CLAVE_ELECCION`, `./solana/deeplink/conexion.ts:129`) y nada de producción la borraba, así que un build con la bandera prendida y después ausente dejaba a ese teléfono con este gate devolviendo `"phantom"` **sin puerta de vuelta**, o sea con la superficie NO replegable — que es justo lo que AC-9 pide poder hacer. Medido antes del fix: agregar la bandera como 3ª condición ponía **31 `it` en rojo**, o sea que la frase y el árbol se contradecían.
    *  ⇒ Hoy la lee, y la objeción original sigue en pie sin aplicar: la bandera no CONTESTA ninguna de las otras dos condiciones (no sabe qué eligió la persona ni qué hay inyectado), es una tercera que se conjuga con ellas. El literal de la env NO entra a este archivo: viene por (`resolveSolanaDeeplinkEnabled`, `./chain.ts:269`), que es su único sitio en producción.
    *  ⛔ Y NO alcanza sola: el otro repliegue es el gesto de la persona, y es el control «Cambiar de billetera» de (`OlvidarBilleteraDeEnlace`, `../presentation/flow.tsx:4243`), que llama a (`olvidar`, `./solana/preparacion-por-enlace.ts:246`). Los dos hacen falta: la bandera repliega el BUILD, el control repliega EL DISPOSITIVO. */
   private caminoPorEnlace(): BilleteraDeeplink | "no-podemos-saber" | null {
-    if (solanaWalletBridge.getWalletAvailability() !== "none") return null; if (!resolveSolanaDeeplinkEnabled()) return null; // LA 3ª CONDICIÓN, EN ESTA MISMA LÍNEA (Δ0). ⚠️ ACÁ DECÍA «este bloque recibe 47 citas por número desde más abajo» Y ERA UN CONTEO INVENTADO (re-AR it2 · BLQ-BAJO-4): el 47 se copió del número viejo del archivo, que en ESTE MISMO COMMIT se estaba corrigiendo a 65 en `:906`. ⚠️ Y LA CORRECCIÓN DE ESE 47 REPITIÓ EL DEFECTO UNA CAPA MÁS ARRIBA (CR/MNR-2): decía «RE-MEDIDO en el árbol de este commit» y reportaba, al dígito, los cinco números del árbol BASE. ⇒ Desde el fix-pack del CR los números de esta línea NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica contra el árbol en cada `npm test` y que se ponen ROJOS solos. Las que apuntan MÁS ABAJO de esta línea son [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-2241=9]] ocurrencias a [[CENSO src/infrastructure/solana-wallet.ts destinos-desde-2241=6]] destinos. El archivo entero recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes=130]] a [[CENSO src/infrastructure/solana-wallet.ts destinos=69]] destinos, y [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=78]] de esas caen por debajo de `:906`. ⚠️ Lo que estos marcadores NO cuentan son las citas SUELTAS —`solana-wallet.ts:NNNN` sin símbolo delante—, que se rompen igual y no las mira nadie. El invariante que justifica el Δ0 no es el total: es que TODO lo que está más abajo se corre con una línea nueva acá. Va DESPUÉS de la disponibilidad y ANTES del disco a propósito: `T-065-GATE-1`/`GATE-2` afirman que con `injected` el gate corta "en su PRIMERA condición, sin siquiera mirar el disco", y meter la bandera antes volvería falsa esa frase para todos los `it` que no la declaran
+    if (solanaWalletBridge.getWalletAvailability() !== "none") return null; if (!resolveSolanaDeeplinkEnabled()) return null; // LA 3ª CONDICIÓN, EN ESTA MISMA LÍNEA (Δ0). ⚠️ ACÁ DECÍA «este bloque recibe 47 citas por número desde más abajo» Y ERA UN CONTEO INVENTADO (re-AR it2 · BLQ-BAJO-4): el 47 se copió del número viejo del archivo, que en ESTE MISMO COMMIT se estaba corrigiendo a 65 en `:906`. ⚠️ Y LA CORRECCIÓN DE ESE 47 REPITIÓ EL DEFECTO UNA CAPA MÁS ARRIBA (CR/MNR-2): decía «RE-MEDIDO en el árbol de este commit» y reportaba, al dígito, los cinco números del árbol BASE. ⇒ Desde el fix-pack del CR los números de esta línea NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica contra el árbol en cada `npm test` y que se ponen ROJOS solos. Las que apuntan MÁS ABAJO de esta línea son [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-2241=11]] ocurrencias a [[CENSO src/infrastructure/solana-wallet.ts destinos-desde-2241=8]] destinos. El archivo entero recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes=137]] a [[CENSO src/infrastructure/solana-wallet.ts destinos=73]] destinos, y [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=83]] de esas caen por debajo de `:906`. ⚠️ Lo que estos marcadores NO cuentan son las citas SUELTAS —`solana-wallet.ts:NNNN` sin símbolo delante—, que se rompen igual y no las mira nadie. El invariante que justifica el Δ0 no es el total: es que TODO lo que está más abajo se corre con una línea nueva acá. Va DESPUÉS de la disponibilidad y ANTES del disco a propósito: `T-065-GATE-1`/`GATE-2` afirman que con `injected` el gate corta "en su PRIMERA condición, sin siquiera mirar el disco", y meter la bandera antes volvería falsa esa frase para todos los `it` que no la declaran
     const disco = this.discoDeEnlace();
     // 🔴 EL TERCER VALOR, Y POR QUÉ NO PUEDE COLAPSAR EN `null`. Acá el disco NO SE DEJA LEER, así que
     // la pregunta "¿qué eligió la persona?" no tiene respuesta: no es "no eligió". Colapsarlo en `null`
@@ -2459,6 +2459,126 @@ export class SolanaWalletAdapter
     }).irA;
   }
 
+
+  // ── HU-079 · EL ALQUILER SE LEE, NO SE ESCRIBE ─────────────────────────────────────────────────
+  // Por qué se pregunta en vez de escribirse, y por qué son DOS preguntas y no una: el bloque de
+  // (`SolanaRentReader`, `../application/ports.ts:1318`). Acá va sólo lo que es propio del adapter.
+
+  /**
+   * Q2 · RETROSPECTIVA — cuánto devuelve el `close` de UN escrow YA ABIERTO.
+   *
+   * 🔴 LEE SALDOS EN VEZ DE CALCULAR UNA FÓRMULA, y ésa es toda la decisión. Por qué —la tarifa se
+   * cobra al CREAR, y las 15 cuentas vivas de devnet lo prueban— y por qué son DOS cuentas y nunca
+   * tres: (`SolanaOpenEscrowRent`, `../application/ports.ts:1291`).
+   *
+   * 🔴 EL MINT SALE DEL `EscrowState` ON-CHAIN Y NUNCA DEL LLAMADOR: de ahí sale la dirección del
+   * vault, así que un mint ajeno preguntaría por el saldo de una ATA que el `close` no va a cerrar.
+   * Mismo criterio que (`getAssociatedTokenAddressSync`, `:1624`), que arma la ix con ese mismo mint.
+   *
+   * 🔴 CUALQUIER TROPIEZO CONTESTA `unknown`, Y NUNCA UN NÚMERO — RPC que tira, techo vencido,
+   * `EscrowState` ausente, y vault ausente. El último es el que importa: un `?? 0` sobre ese saldo
+   * devolvería `{known, 1.962.720}`, una cifra INCOMPLETA con cara de dato medido.
+   *
+   * El techo es (`ESCROW_INDEX_PROBE_TIMEOUT_MS`, `:121`) —reusado, no inventado— y cubre las DOS
+   * lecturas juntas: misma familia de sonda, dentro del camino que la persona mira.
+   */
+  async readOpenEscrowRent(input: {
+    sender: string;
+    remittanceId: string;
+  }): Promise<SolanaOpenEscrowRent> {
+    const senderB58 = input.sender?.trim() ? input.sender : ((await this.getAddress()) ?? "");
+    // Sin sender o sin id no hay PDA que derivar: no es que no haya alquiler, es que no podemos mirar.
+    if (!senderB58 || !input.remittanceId?.trim()) return { status: "unknown" };
+    try {
+      // lazy-import (patrón `probeDeposit`, `:1254` / `closeEscrow`, `:1561`, DT-SDD-8)
+      const web3 = await import("@solana/web3.js");
+      const { PublicKey: PublicKeyLazy, Connection } = web3;
+      const anchor = await import("@coral-xyz/anchor");
+      const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+      const { escrowIdl } = await import("./solana/escrow-idl");
+
+      const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
+      const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+      // Misma derivación que deposit/refund/close (fuente única, AH-9): no pueden divergir.
+      const { pda: escrowStatePda } = this.deriveEscrowState(senderPk, programId, input.remittanceId);
+      const connection = new Connection(
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+      );
+
+      return await withTimeout(
+        (async (): Promise<SolanaOpenEscrowRent> => {
+          const stateInfo = await connection.getAccountInfo(escrowStatePda);
+          if (!stateInfo) return { status: "unknown" }; // ya cerrada, o nunca existió: no lo sabemos
+          const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+          // Si no decodifica, tira y el `catch` de abajo contesta `unknown`: bytes ajenos al layout no
+          // son un escrow del que se pueda afirmar un alquiler.
+          const state = coder.decode("EscrowState", stateInfo.data) as {
+            mint: InstanceType<typeof PublicKey>;
+          };
+          const vaultPk = getAssociatedTokenAddressSync(
+            state.mint, // ⛔ el mint ON-CHAIN, NUNCA uno del llamador (ver el docblock)
+            escrowStatePda,
+            /*allowOwnerOffCurve*/ true,
+          );
+          const vaultInfo = await connection.getAccountInfo(vaultPk);
+          // ⛔ NADA de `?? 0` acá: ver el docblock. Falta una de las dos ⇒ no hay suma que afirmar.
+          if (!vaultInfo) return { status: "unknown" };
+          const lamports = stateInfo.lamports + vaultInfo.lamports;
+          // Un RPC que contesta algo que no es un número finito no contestó.
+          if (typeof lamports !== "number" || !Number.isFinite(lamports)) return { status: "unknown" };
+          return { status: "known", lamports };
+        })(),
+        ESCROW_INDEX_PROBE_TIMEOUT_MS,
+      );
+    } catch {
+      return { status: "unknown" }; // no pudimos preguntar; NO es "no devuelve nada"
+    }
+  }
+
+  /**
+   * Q1 · PROSPECTIVA — cuánto va a inmovilizar un depósito NUEVO, en la cadena donde la app corre AHORA.
+   *
+   * Acá sí es el mínimo rent-exempt de hoy, porque la cuenta todavía no existe. Es la pregunta OPUESTA
+   * a (`readOpenEscrowRent`, `:2485`), y las dos respuestas son distintas al mismo tiempo sin que
+   * ninguna esté mal. Por qué los dos sumandos van SEPARADOS, y por qué pre-sumarlos haría que el
+   * primer call-site prometiera el índice de más: (`SolanaNewDepositRent`, `../application/ports.ts:1304`).
+   *
+   * ⛔ EL TAMAÑO DEL VAULT NO SE ESCRIBE: sale de `ACCOUNT_SIZE` de `@solana/spl-token` (0.4.15), que
+   * vale 165 y es el mismo `AccountLayout.span`. Si la librería cambia el layout, esto lo sigue solo.
+   * Los otros dos SÍ son literales, y por qué eso es legítimo está en (`ESCROW_STATE_SPACE`, `:2644`).
+   *
+   * UN SOLO techo para las tres consultas —van en `Promise.all`, o sea una sola espera—, el mismo
+   * (`ESCROW_INDEX_PROBE_TIMEOUT_MS`, `:121`) de su hermana. Cualquier tropiezo ⇒ `unknown`.
+   */
+  async readNewDepositRent(): Promise<SolanaNewDepositRent> {
+    try {
+      const { Connection } = await import("@solana/web3.js");
+      const { ACCOUNT_SIZE } = await import("@solana/spl-token");
+      const connection = new Connection(
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+      );
+      const [estado, vault, indice] = await withTimeout(
+        Promise.all([
+          connection.getMinimumBalanceForRentExemption(ESCROW_STATE_SPACE),
+          connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE),
+          connection.getMinimumBalanceForRentExemption(ESCROW_INDEX_SPACE),
+        ]),
+        ESCROW_INDEX_PROBE_TIMEOUT_MS,
+      );
+      // Los TRES, no uno: un RPC que contesta dos números y un `null` no contestó la pregunta.
+      for (const n of [estado, vault, indice]) {
+        if (typeof n !== "number" || !Number.isFinite(n)) return { status: "unknown" };
+      }
+      return {
+        status: "known",
+        escrowPairLamports: estado + vault,
+        escrowIndexLamports: indice,
+      };
+    } catch {
+      return { status: "unknown" }; // no pudimos preguntar; NO es "no cuesta nada"
+    }
+  }
+
 }
 
 /**
@@ -2496,3 +2616,39 @@ const SIGNATURE_POLL_INTERVAL_MS = 1_000;
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ── HU-079 · LOS DOS TAMAÑOS QUE SÍ SE ESCRIBEN, Y POR QUÉ ESO ES LEGÍTIMO ───────────────────────
+//
+// Van ACÁ ABAJO, al final del archivo, por la razón que este archivo repite en cada import de
+// `:11-44`: todas las citas ancladas que recibe apuntan de `:188` para abajo y una línea nueva aguas
+// arriba las rota a todas.
+//
+// 🔴 LA REGLA QUE LOS DEJA PASAR (`CD-079-2`): un literal es legítimo cuando lo que describe cambia con
+// un DESPLIEGUE, e ilegítimo cuando lo cambia la cadena sola. El primero es un evento de COMMIT, y un
+// pin atado a `npm test` sí puede cazarlo: se pone rojo el día que alguien lo edita. El segundo es un
+// evento de CALENDARIO, y NINGÚN guard del gate puede cazarlo — que es exactamente por lo que la tarifa
+// de alquiler de acá arriba se pregunta en vez de escribirse.
+
+/** El `space` de la cuenta `EscrowState` del programa desplegado: 8 (discriminador Anchor) + los
+ *  campos. Derivación completa en `../application/solana-escrow-rent.ts:148-152`.
+ *
+ *  ✅ LITERAL LEGÍTIMO POR `CD-079-2`: esto NO es la tarifa de la cadena, es una propiedad del PROGRAMA
+ *  DESPLEGADO. Sólo cambia con un redespliegue, o sea con un commit de `solana-programs`, y ahí un
+ *  humano lo ve. De hecho ya hay uno en curso: `071/W1a` lo lleva a 186 bytes, y ese día esta línea se
+ *  edita a mano y con intención. Medido el 2026-09-04 por si sirve de contraste: con 186 bytes el
+ *  rent-exempt sería 1.595.120 en devnet y 1.988.562 en mainnet.
+ *
+ *  ⚠️ VERIFICADO CONTRA LA CADENA Y NO SÓLO CONTRA LA PROSA DEL REPO: (128 + 154) × 5080 = 1.432.560,
+ *  que es exactamente lo que `getMinimumBalanceForRentExemption(154)` contestó en devnet el 2026-09-04.
+ *  El tamaño es correcto; lo que había envejecido era el factor. */
+const ESCROW_STATE_SPACE = 154;
+
+/** El `space` de la cuenta `EscrowIndex`. Derivación completa en
+ *  `../application/solana-escrow-rent.ts:140-149`.
+ *
+ *  ✅ LITERAL LEGÍTIMO POR `CD-079-2`, por la misma razón exacta que `ESCROW_STATE_SPACE` de acá arriba:
+ *  propiedad del programa desplegado, no de la tarifa.
+ *
+ *  ⚠️ VERIFICADO CONTRA LA CADENA: (128 + 558) × 5080 = 3.484.880, que es lo que
+ *  `getMinimumBalanceForRentExemption(558)` contestó en devnet el 2026-09-04. */
+const ESCROW_INDEX_SPACE = 558;

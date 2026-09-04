@@ -54,6 +54,9 @@ import type {
   SolanaPrincipalAuthorization,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
+  SolanaOpenEscrowRent,
+  SolanaNewDepositRent,
+  SolanaRentReader,
   PruebaDePosesionPorEnlace,
   PruebaPorEnlace,
   SesionReader,
@@ -1245,5 +1248,50 @@ export class FakeSesionStore implements SesionReader, SesionRecorder {
   record(address: string, token: string): void {
     this.escrituras.push({ address, token });
     this.porAddress.set(address, token);
+  }
+}
+
+// FakeSolanaRentReader — HU-079. La respuesta de LA CADENA a las DOS preguntas del alquiler.
+//
+// Molde: `FakeSolanaSenderSolBalanceProbe`, `:1138`, y por la misma razón que allá `mode="reject"` NO
+// es un adorno: es el ÚNICO modo que ejercita "no pudimos preguntar", que en esta HU es la mitad del
+// arreglo. Sin él, el camino `unknown` —el que decide que la pantalla NO muestre ninguna cifra y que el
+// umbral caiga a su respaldo— no se puede poner a prueba, y un camino que ningún test recorre es
+// indistinguible de uno que no existe.
+//
+// 🔴 LOS DEFAULTS SON LOS VALORES MEDIDOS EN CADENA EL 2026-09-04, y son DISTINTOS entre sí a propósito:
+//   · `openLamports` = 4.002.000 — lo que devuelven 14 de los 15 escrows vivos de devnet (creados al
+//     factor 6960, congelado el día de su creación).
+//   · el par nuevo   = 2.921.000 — lo que un depósito de HOY inmoviliza en devnet (factor 5080).
+// Que NO coincidan es la propiedad que hace útil este doble: un test que confunda la pregunta
+// retrospectiva con la prospectiva obtiene un número distinto y se pone rojo, en vez de pasar por
+// casualidad. ⛔ PROHIBIDO igualarlos "para simplificar": eso apaga exactamente esa señal.
+export class FakeSolanaRentReader implements SolanaRentReader {
+  public openCalls: Array<{ sender: string; remittanceId: string }> = [];
+  public newDepositCalls = 0;
+  constructor(
+    private readonly openLamports: number = 4_002_000,
+    private readonly mode: "resolve" | "unknown" | "reject" = "resolve",
+    private readonly escrowPairLamports: number = 2_921_000,
+    private readonly escrowIndexLamports: number = 3_484_880,
+  ) {}
+  async readOpenEscrowRent(input: {
+    sender: string;
+    remittanceId: string;
+  }): Promise<SolanaOpenEscrowRent> {
+    this.openCalls.push(input);
+    if (this.mode === "reject") throw new Error("open_escrow_rent_boom");
+    if (this.mode === "unknown") return { status: "unknown" };
+    return { status: "known", lamports: this.openLamports };
+  }
+  async readNewDepositRent(): Promise<SolanaNewDepositRent> {
+    this.newDepositCalls += 1;
+    if (this.mode === "reject") throw new Error("new_deposit_rent_boom");
+    if (this.mode === "unknown") return { status: "unknown" };
+    return {
+      status: "known",
+      escrowPairLamports: this.escrowPairLamports,
+      escrowIndexLamports: this.escrowIndexLamports,
+    };
   }
 }

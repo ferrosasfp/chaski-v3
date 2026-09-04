@@ -839,7 +839,7 @@ describe("T-067-21 (AR/BLQ-ALTO-1): la vuelta del permiso se lee del href que le
 // `grep -rn "\.pedir(" --include=*.test.ts --include=*.test.tsx src/ app/` devolvía **un solo**
 // call-site ejecutable del `pedir()` real —el (`pedir`, `:769`) de `T-067-21`— y recorría **una** de las cinco
 // ramas (desafío fresco ⇒ `hay-que-salir`). Las otras cuatro se afirmaban ÚNICAMENTE a través de
-// (`FakePruebaDePosesionPorEnlace`, `../../test-support/fakes.ts:1212`), **cuyo valor de retorno ES la
+// (`FakePruebaDePosesionPorEnlace`, `../../test-support/fakes.ts:1215`), **cuyo valor de retorno ES la
 // conclusión bajo prueba**: el doble contesta `no-corresponde` porque se lo pusieron, no porque el
 // gate haya decidido nada. ⇒ el docblock de (`pedir`, `../solana-wallet.ts:2379`) dice de su primera
 // línea *"Es la línea que sostiene AC-8"*, y borrarla no ponía roja a la suite.

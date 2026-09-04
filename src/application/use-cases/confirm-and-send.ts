@@ -1,6 +1,6 @@
 import type { Remittance } from "../../domain/remittance";
 import { isRealRefundReceipt } from "../refund-receipt";
-import { SENDER_MIN_LAMPORTS_FOR_DEPOSIT } from "../solana-escrow-rent";
+import { senderMinLamportsForDeposit } from "../solana-escrow-rent"; // HU-079: el RESPALDO ya NO se importa acá — lo consume `senderMinLamportsForDeposit` adentro, y el guard compara SÓLO contra la función. Un import suelto del literal sería la puerta para volver a compararlo directo (`CD-079-3`).
 import type {
   Clock,
   PrincipalDepositState,
@@ -9,7 +9,7 @@ import type {
   SolanaEscrowDepositProbe,
   SolanaPayoutPrepareGateway,
   SolanaSenderSolBalance,
-  SolanaSenderSolBalanceProbe, PruebaDePosesionPorEnlace, // WKH-359: EN ESTA LÍNEA, no en una nueva — este archivo recibe [[CENSO src/application/use-cases/confirm-and-send.ts entrantes=17]] citas ancladas y agregar una línea acá arriba las corre a todas. ⚠️ ACÁ DECÍA «8» (CR/MNR-3) y el 8 no era de este renglón: era la cifra de `>= :463`, o sea un número COPIADO del vecino en vez de medido. Ahora es un marcador que verifica `citas-ancladas.test.ts`
+  SolanaSenderSolBalanceProbe, PruebaDePosesionPorEnlace, SolanaRentReader, SolanaNewDepositRent, // HU-079: EN ESTA LÍNEA por lo mismo. // WKH-359: EN ESTA LÍNEA, no en una nueva — este archivo recibe [[CENSO src/application/use-cases/confirm-and-send.ts entrantes=18]] citas ancladas y agregar una línea acá arriba las corre a todas. ⚠️ ACÁ DECÍA «8» (CR/MNR-3) y el 8 no era de este renglón: era la cifra de `>= :463`, o sea un número COPIADO del vecino en vez de medido. Ahora es un marcador que verifica `citas-ancladas.test.ts`
   SolanaSettlementFailureReason,
   SolanaSettlementGateway,
   WalletPort,
@@ -171,7 +171,7 @@ export class ConfirmAndSend {
       prepare: SolanaPayoutPrepareGateway;
       gateway: SolanaSettlementGateway;
       probe: SolanaEscrowDepositProbe;
-      senderBalance: SolanaSenderSolBalanceProbe; pop: PruebaDePosesionPorEnlace; // WKH-359/AC-2 — EN ESTA LÍNEA (Δ0: hay 8 citas ancladas de `:463` para abajo, y cuatro de ellas viven en `flow.tsx`, que recibe 83). ⛔ VIAJA EN EL BUNDLE Y ES REQUERIDO, por la MISMA razón que `probe` y `senderBalance` de acá arriba: un `pop?` suelto que quedara undefined haría que el paso de la prueba de posesión desapareciera EN SILENCIO, y el camino por enlace volvería —sin ruido— al `payout_pop_unavailable` que esta HU vino a matar. En el camino inyectado su `pedir()` contesta `no-corresponde` y no hace nada (AC-8), así que inyectarlo siempre no cuesta nada.
+      senderBalance: SolanaSenderSolBalanceProbe; pop: PruebaDePosesionPorEnlace; rent: SolanaRentReader; // HU-079: EN ESTA LÍNEA y SIN `?`, por la MISMA razón que `senderBalance` de acá arriba — lo que un `rent?` haría desaparecer EN SILENCIO no es el guard entero sino su LECTURA, y sin lectura el umbral cae al respaldo, que hoy pide 2.370.680 lamports de más en devnet: el síntoma sería gente con saldo suficiente trabada sin motivo, y nada rojo. // WKH-359/AC-2 — EN ESTA LÍNEA (Δ0: hay 8 citas ancladas de `:463` para abajo, y cuatro de ellas viven en `flow.tsx`, que recibe 83). ⛔ VIAJA EN EL BUNDLE Y ES REQUERIDO, por la MISMA razón que `probe` y `senderBalance` de acá arriba: un `pop?` suelto que quedara undefined haría que el paso de la prueba de posesión desapareciera EN SILENCIO, y el camino por enlace volvería —sin ruido— al `payout_pop_unavailable` que esta HU vino a matar. En el camino inyectado su `pedir()` contesta `no-corresponde` y no hace nada (AC-8), así que inyectarlo siempre no cuesta nada.
     },
   ) {}
 
@@ -282,7 +282,7 @@ export class ConfirmAndSend {
     } catch {
       return { status: "unknown" };
     }
-  }
+  } /* 🔴 HU-079 — `probeNewDepositRent` VA EN ESTA MISMA LÍNEA, y no en las 13 que ocuparía con formato normal, porque este archivo recibe 29 citas ancladas por número de `:337` para abajo (`:390`, `:463`, `:477`, `:481`, `:486`…) y cuatro de ellas viven en `flow.tsx`, que a su vez recibe 165. Es hermano exacto de (`probeSenderSol`, `:278`) y tiene su misma disciplina: cualquier tropiezo es `unknown`, o sea "no pudimos preguntar". ⛔ Lo que NO hace es devolver un número inventado — quien lo consume, (`senderMinLamportsForDeposit`, `../solana-escrow-rent.ts:241`), degrada al RESPALDO, que pide de MÁS, y ésa es la única dirección segura de este lado (`CD-079-4`). */ private async probeNewDepositRent(): Promise<SolanaNewDepositRent> { if (!this.solana) return { status: "unknown" }; try { return await this.solana.rent.readNewDepositRent(); } catch { return { status: "unknown" }; } }
 
   async execute(input: { remittanceId: string; hrefDeLaVuelta: string }): Promise<ResultadoDeEnvio> { // 🔴 WKH-373 — EL SEGUNDO CAMPO, EN ESTA MISMA LÍNEA (Δ0: este archivo tiene censos anclados a `:463`). ⛔ SIN `?`: es el href de la barra TAL COMO ESTABA AL MONTAR, y su único destino es `authorizePrincipal` (`:486`), que hasta WKH-373 lo leía de `globalThis.location` EN VIVO — o sea, ya limpiado por `limpiarLaBarra` (`../../presentation/flow.tsx:4023`). Este caso de uso ⛔ NO lo interpreta, ⛔ no lo parsea y ⛔ no lo reescribe: lo pasa tal cual, que es lo que hace que la aplicación NO dependa del orden entre dos archivos.
     const r = await this.repo.get(input.remittanceId);
@@ -424,8 +424,8 @@ export class ConfirmAndSend {
     //
     //     Fail-open acá NO contradice el fail-closed del resto del money-path: los otros guards son los
     //     únicos que impiden mover valor sin autorizar, éste no impide nada que la cadena no impida ya.
-    const senderSol = await this.probeSenderSol(address);
-    if (senderSol.status === "known" && senderSol.lamports < SENDER_MIN_LAMPORTS_FOR_DEPOSIT) {
+    const senderSol = await this.probeSenderSol(address); const rent = await this.probeNewDepositRent(); /* 🔴 HU-079 — EL UMBRAL SE LEE DE LA CADENA, Y LA LECTURA VA EN ESTA MISMA LÍNEA (Δ0, por lo mismo que el helper de arriba). Van pegadas a propósito: éste es el punto donde el use-case YA hacía una lectura RPC, así que no aparece ningún `await` nuevo en un camino que antes fuera síncrono, y son la MISMA pregunta partida en dos —"¿cuánto tiene?" y "¿cuánto hace falta?"—, así que separarlas invitaría a comparar un saldo de hoy contra un requisito de otro momento. ⚠️ El fail-open de `senderSol.status !== "known"` que explica el bloque de arriba NO se toca: está razonado y declarado desde antes, y esta HU no lo revisa. El que sí es de esta HU es el OTRO, el del alquiler, y va en la dirección CONTRARIA (`CD-079-4`): lectura fallida ⇒ el umbral cae al RESPALDO, que es el máximo histórico medido y por lo tanto pide de MÁS. Nunca menos. */
+    if (senderSol.status === "known" && senderSol.lamports < senderMinLamportsForDeposit(rent)) {
       await this.failAndRefund(r, SOLANA_SENDER_SOL_INSUFFICIENT, "not_deposited");
       return { estado: "listo", remesa: r }; // NO se prepara el payout, NO se le pide una sola firma a la wallet
     }

@@ -86,7 +86,7 @@ import {
   FAKE_SOLANA_BENEFICIARY,
   FakeKycStore,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeSolanaSenderSolBalanceProbe,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
@@ -273,7 +273,7 @@ async function recorridoInyectado(
       gateway: new FakeSolanaSettlementGateway(),
       probe: new FakeSolanaEscrowDepositProbe(),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
-      pop: enlace,
+      pop: enlace, rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
     }).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }),
   );
   return { firmados, estadoFinal: remesa.snapshot.status, enlace: enlace.respuestas };

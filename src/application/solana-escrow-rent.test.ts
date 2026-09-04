@@ -26,23 +26,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { escrowIdl } from "../infrastructure/solana/escrow-idl";
+import { escrowRentExplainer } from "../presentation/flow-vm"; // HU-079: el sujeto de `T-079-D3` es la FUNCIÓN de pantalla, no una constante de este módulo. Es un import de presentación en un test de aplicación, y va con su motivo: este `it` es el sucesor directo de `T-077-2` y se queda en su archivo para no perder la trazabilidad de qué guard reemplaza a cuál. `flow-vm.ts` no importa React.
 import {
-  ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS,
-  ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS,
   // WKH-347 (CD-22): se IMPORTA en vez de escribirse a mano. Acá vivía un
   // `const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;` local con el comentario "la cuenta que NO se crea
   // acá", y las dos mitades de esa línea envejecieron: el número es una DECISIÓN derivada que pertenece
   // al módulo, y la cuenta ahora sí se crea. Dos literales iguales en dos repositorios de decisión
   // distintos es el defecto que este repo ya documentó una vez.
   ESCROW_INDEX_RENT_LAMPORTS,
-  ESCROW_STATE_RENT_DEVNET_LAMPORTS,
-  ESCROW_STATE_RENT_MAINNET_LAMPORTS,
-  ESCROW_VAULT_RENT_DEVNET_LAMPORTS,
-  ESCROW_VAULT_RENT_MAINNET_LAMPORTS,
   LAMPORTS_PER_SOL,
   NONCE_ACCOUNT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  senderMinLamportsForDeposit,
   SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS,
   WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS,
   formatLamportsAsSol,
@@ -148,22 +144,28 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
     // La MISMA fórmula sobre `EscrowState` (154 bytes) reproduce un número que salió de una medición en
     // cadena, no de la fórmula. Es lo que vuelve a la de arriba una derivación y no una coincidencia.
     //
-    // 🔴 T-077-3 — EL PIN DE 6960 NO BAJÓ DE CADENA, Y ÉSE ES EL PUNTO. Era la ÚNICA aserción del
-    // archivo que ataba una constante a un factor de cadena, y con HU-077 la constante que vigila pasó
-    // a decir en el NOMBRE de qué cadena habla. El 6960 se queda en 6960 (mainnet); el 6333 es un pin
-    // NUEVO (devnet, `api.devnet.solana.com`, 2026-09-03). Cambiar un pin de cadena en silencio era el
-    // riesgo, y acá no ocurre.
-    expect(ESCROW_STATE_RENT_MAINNET_LAMPORTS).toBe((128 + 154) * 6960);
-    expect(ESCROW_STATE_RENT_DEVNET_LAMPORTS).toBe((128 + 154) * 6333);
-    // 🔴 Y las dos POR DIFERENCIA, que ELIMINA el `+128` de la ecuación: un mutante que cambiara el
-    // tamaño Y el factor a la vez sobrevive a la forma `(128 + size) * factor` —los dos términos se
-    // compensan— y muere acá, porque la resta de dos tamaños no lleva el overhead.
-    expect(
-      (ESCROW_VAULT_RENT_MAINNET_LAMPORTS - ESCROW_STATE_RENT_MAINNET_LAMPORTS) / (165 - 154),
-    ).toBe(6960);
-    expect(
-      (ESCROW_VAULT_RENT_DEVNET_LAMPORTS - ESCROW_STATE_RENT_DEVNET_LAMPORTS) / (165 - 154),
-    ).toBe(6333);
+    // 🔴 T-077-3, RE-APUNTADO POR HU-079 A MEDICIONES Y NO A CONSTANTES. Las cuatro hojas que este
+    // bloque vigilaba se borraron, así que los oráculos van A MANO acá: son lecturas de
+    // `getMinimumBalanceForRentExemption(size)` con su fecha y su cluster, no valores del módulo. Que
+    // vayan a mano es lo correcto y no una concesión — un pin que se derive del módulo que vigila es la
+    // constante mirándose al espejo.
+    //
+    // ⚠️ Y ACÁ ESTÁ, EN UNA TABLA, LA RAZÓN ENTERA DE ESTA HU: el MISMO tamaño de cuenta, medido con
+    // UN DÍA de diferencia, da tres factores distintos. Nadie tocó el repo entre las dos filas.
+    //     size 154        2026-09-03            2026-09-04
+    //     devnet          1.785.906 (6333)      1.432.560 (5080)
+    //     mainnet         1.962.720 (6960)      1.785.906 (6333)
+    // Lo que ayer era el par de devnet hoy es el de mainnet, y la HU-077 congeló exactamente ese
+    // número. Por eso lo que se pinnea acá es la FÓRMULA —que no envejece— y no la tarifa.
+    expect((128 + 154) * 6960).toBe(1_962_720); // mainnet 2026-09-03
+    expect((128 + 154) * 6333).toBe(1_785_906); // devnet 2026-09-03 = mainnet 2026-09-04
+    expect((128 + 154) * 5080).toBe(1_432_560); // devnet 2026-09-04, re-medido por HU-079
+    // 🔴 Y POR DIFERENCIA, que ELIMINA el `+128` de la ecuación: un mutante que cambiara el tamaño Y el
+    // factor a la vez sobrevive a la forma `(128 + size) * factor` —los dos términos se compensan— y
+    // muere acá, porque la resta de dos tamaños no lleva el overhead. Los seis números son lecturas.
+    expect((2_039_280 - 1_962_720) / (165 - 154)).toBe(6960); // mainnet 2026-09-03
+    expect((1_855_569 - 1_785_906) / (165 - 154)).toBe(6333); // devnet 2026-09-03
+    expect((1_488_440 - 1_432_560) / (165 - 154)).toBe(5080); // devnet 2026-09-04
   });
 
   // 🔴 EL CONTROL QUE VUELVE HONESTO AL `MEASURED_FIRST_DEPOSIT_LAMPORTS` escrito a mano: la medición en
@@ -173,10 +175,17 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
   // 4.002.000 fue medido sobre un depósito COBRADO al factor 6960, así que su contraparte correcta es
   // el lado que COBRA. Mismo operador `toBe`, misma fuerza, otra constante. Un `>=` acá dejaría pasar
   // cualquier valor por encima, que es la forma de aserción que este archivo ya cazó tautológica.
-  // ⛔ (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:58`) sigue escrito A MANO: importarlo del módulo que se
+  // ⛔ (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:54`) sigue escrito A MANO: importarlo del módulo que se
   // vigila convertiría esto en la constante mirándose al espejo.
-  it("la medición en cadena y la suma de las partes coinciden", () => {
-    expect(MEASURED_FIRST_DEPOSIT_LAMPORTS).toBe(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS);
+  // 🔴 RE-APUNTADO POR HU-079. Su contraparte era `ESCROW_DEPOSIT_RENT_CHARGED_` + `LAMPORTS`, que se
+  // borró. La contraparte NUEVA es mejor y no peor: el saldo REAL, leído cuenta por cuenta con
+  // `getAccountInfo` el 2026-09-04, del par `2eWYonV4Pjzn…` + `2S5QejufWmGD…`, que sigue vivo en devnet
+  // y es el que tienen 14 de los 15 escrows abiertos. Sigue habiendo DOS fuentes independientes del
+  // mismo número —la medición del primer depósito y el saldo de las cuentas de hoy— y ninguna sale del
+  // módulo que se vigila, así que esto no es la constante mirándose al espejo.
+  it("la medición en cadena coincide con el saldo REAL del par vivo mayoritario", () => {
+    expect(MEASURED_FIRST_DEPOSIT_LAMPORTS).toBe(1_962_720 + 2_039_280);
+    expect(MEASURED_FIRST_DEPOSIT_LAMPORTS).toBe(4_002_000);
   });
 
   // La fuente de por qué el índice no entra: el IDL. No es una opinión sobre el programa, es su
@@ -240,28 +249,17 @@ describe("el número que se le muestra a la persona nunca pide menos que el guar
 
 // ── WKH-327 · el mismo alquiler, mirado desde el lado que lo DEVUELVE ───────────────────────────────
 describe("el alquiler que `close` devuelve sale de la misma derivación que el umbral", () => {
-  it("los dos sumandos están pinneados a los tamaños de cuenta del programa", () => {
-    expect(ESCROW_STATE_RENT_MAINNET_LAMPORTS).toBe(1_962_720); // EscrowState, 154 bytes, factor 6960
-    expect(ESCROW_VAULT_RENT_MAINNET_LAMPORTS).toBe(2_039_280); // ATA del vault, 165 bytes, factor 6960
-    // Y las DOS hojas de devnet, medidas contra `api.devnet.solana.com` el 2026-09-03. Los mismos
-    // tamaños de cuenta, otro factor: la cadena movió su tarifa sola de 6960 a 6333.
-    expect(ESCROW_STATE_RENT_DEVNET_LAMPORTS).toBe(1_785_906); // EscrowState, 154 bytes, factor 6333
-    expect(ESCROW_VAULT_RENT_DEVNET_LAMPORTS).toBe(1_855_569); // ATA del vault, 165 bytes, factor 6333
-  });
-
-  it("el total que se COBRA es la suma de las dos hojas de mainnet, no un número escrito aparte", () => {
-    expect(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS).toBe(
-      ESCROW_STATE_RENT_MAINNET_LAMPORTS + ESCROW_VAULT_RENT_MAINNET_LAMPORTS,
-    );
-    expect(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS).toBe(4_002_000);
-  });
-
-  // 🔴 Ata la constante nueva a la MEDICIÓN EN CADENA, no a sí misma. Un test que sólo comparara
-  // ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS contra la suma de sus sumandos aplaudiría cualquier par de
-  // números que sumen bien.
-  it("coincide EXACTO con lo que el primer depósito costó en cadena", () => {
-    expect(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS).toBe(MEASURED_FIRST_DEPOSIT_LAMPORTS);
-  });
+  // 🔴 ACÁ VIVÍAN TRES `it` QUE PINNEABAN LAS CUATRO HOJAS Y SU `Math.max`, y se van CON ellas. No
+  // eran malos tests: eran tests correctos de una forma equivocada. Pinneaban, con `toBe` exacto, una
+  // tarifa que la cadena mueve SOLA — `ESCROW_STATE_RENT_DEVNET…` valía 1.785.906 el 2026-09-03 y el
+  // 2026-09-04 la cadena contestaba 1.432.560 para el mismo tamaño de cuenta. Un pin exacto sobre una
+  // tarifa de calendario no es una defensa: es una fecha de vencimiento que nadie mira, porque el día
+  // que vence nadie corre la suite. Lo que reemplaza a los tres está en `solana-wallet.rent.test.ts`
+  // (la LECTURA) y en `T-079-T2` (el CAMINO del umbral).
+  //
+  // Lo que sí sobrevive, y es el único pin que esta HU deja sobre este número, es que el RESPALDO siga
+  // valiendo lo que se midió: `MEASURED_FIRST_DEPOSIT_LAMPORTS` es lado PIDE ⇒ máximo histórico
+  // congelado ⇒ literal declarado (CD-079-2), y su valor NO cambia en esta HU.
 
   // 🔴 ESTE TEST TENÍA UN NOMBRE QUE AFIRMABA MÁS QUE SU CUERPO Y UNA ASERCIÓN QUE NO PODÍA FALLAR
   // (fix-pack CR/MNR-4, CD-17). Decía "esa cuenta no la cierra ninguna instrucción" —una afirmación
@@ -282,10 +280,9 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
   // SIEMPRE, que es lo que esta constante afirma. Si algún día `close` la vuelve obligatoria, esto se
   // pone rojo y el número hay que re-derivarlo.
   //
-  // ⚠️ Y NO SE LE AGREGÓ UNA ASERCIÓN ARITMÉTICA, a propósito. Cualquier `expect` sobre el VALOR de
-  // `ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS` acá sería una tercera copia del pin que ya hacen los dos `it` de
-  // arriba ((`ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS`, `:256`) y (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:263`)).
-  // Repetir un pin con otra redacción no agrega cobertura, agrega la ilusión de tenerla.
+  // ⚠️ Y NO SE LE AGREGÓ UNA ASERCIÓN ARITMÉTICA, a propósito. Cualquier `expect` sobre el VALOR del
+  // alquiler acá sería una copia del pin que ya hace (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:187`), y
+  // repetir un pin con otra redacción no agrega cobertura: agrega la ilusión de tenerla.
   it("la ix `close` declara `escrow_index` OPCIONAL: se puede cerrar sin esa cuenta", () => {
     const idl = escrowIdl as unknown as {
       instructions: Array<{
@@ -319,65 +316,151 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
   });
 });
 
+// ── HU-079 · EL UMBRAL SE LEE DE LA CADENA ─────────────────────────────────────────────────────────
+//
+// Los TRES pines viejos de 8.874.560 (los dos de acá arriba y el de `flow-vm.test.ts`) ⛔ NO se
+// borraron: siguen pinneando el RESPALDO, que conserva su valor. Si alguno se pone rojo, el respaldo
+// se movió y eso hay que mirarlo a mano.
+describe("HU-079: el umbral que se PIDE sale de la lectura de cadena, no de un literal", () => {
+  // 🔴 T-079-T2 — EL PIN DEL CAMINO, y es estrictamente MÁS FUERTE que los tres pines viejos. El viejo
+  // dice "la constante vale X", y eso lo pasa CUALQUIER constante que valga X. Éste dice "la FUNCIÓN,
+  // sobre la entrada conocida, sigue dando X", y eso sólo lo pasa la aritmética correcta.
+  //
+  // La entrada son los valores que la cadena devolvía el 2026-09-03, o sea los mismos cuatro sumandos
+  // con los que se derivó el literal: 4.002.000 + 80.000 + 18.000 + 4.774.560 = 8.874.560.
+  it("T-079-T2: con la lectura del 2026-09-03 la función devuelve EXACTAMENTE el literal viejo", () => {
+    expect(
+      senderMinLamportsForDeposit({
+        status: "known",
+        escrowPairLamports: 4_002_000,
+        escrowIndexLamports: 4_774_560,
+      }),
+    ).toBe(8_874_560);
+    // Y que ese 8.874.560 es el MISMO número que el respaldo, o sea que la función y el literal no se
+    // separaron en silencio sobre la entrada para la que el literal fue derivado.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(8_874_560);
+  });
+
+  // 🔴 T-079-T1 — Y HACEN FALTA LOS DOS `it`, no uno. `T-079-T2` NO mata al mutante "ignorá el
+  // argumento y devolvé el respaldo", porque sobre ESA entrada las dos ramas coinciden por
+  // construcción. Éste usa la lectura de devnet de HOY, donde las dos ramas difieren en 2.370.680.
+  it("T-079-T1: con la lectura de devnet del 2026-09-04 el umbral BAJA a 6.503.880", () => {
+    expect(
+      senderMinLamportsForDeposit({
+        status: "known",
+        escrowPairLamports: 2_921_000, // rent-exempt(154) + rent-exempt(165) en devnet, factor 5080
+        escrowIndexLamports: 3_484_880, // rent-exempt(558) en devnet
+      }),
+    ).toBe(6_503_880);
+    // El control que lo vuelve un test y no un pin: es DISTINTO del respaldo. Sin esto, un mutante que
+    // devolviera siempre el respaldo pasaría el `toBe` de arriba si los números coincidieran.
+    expect(6_503_880).not.toBe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    // Y la magnitud de lo que el literal pedía de más, que es gente con saldo suficiente trabada.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT - 6_503_880).toBe(2_370_680);
+  });
+
+  // 🔴 T-079-T4 — LA DIRECCIÓN QUE PIERDE PLATA, y es el `it` que el código de AYER no podía pasar.
+  // Con el umbral congelado, una cadena que SUBA deja el requisito por debajo de lo que hace falta: el
+  // guard deja pasar, la persona firma, y la transacción REVIERTE en cadena por saldo. Es la única
+  // dirección que le cuesta algo real a alguien, y hoy estábamos del lado seguro por casualidad —
+  // 6960 fue el máximo histórico, no una cota.
+  it("T-079-T4: si la cadena SUBE, el umbral sube con ella y NO se queda en el respaldo", () => {
+    const alta = senderMinLamportsForDeposit({
+      status: "known",
+      escrowPairLamports: 5_000_000,
+      escrowIndexLamports: 6_000_000,
+    });
+    expect(alta).toBe(11_098_000); // 5.000.000 + 80.000 + 18.000 + 6.000.000
+    // 🔴 LA ASERCIÓN QUE IMPORTA: por ENCIMA del respaldo. Con el literal el umbral se habría quedado
+    // en 8.874.560 y habría dejado pasar a alguien 2.223.440 lamports corto.
+    expect(alta).toBeGreaterThan(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+  });
+
+  // T-079-T3 — el `CD-079-4` del lado que PIDE: la lectura fallida degrada al respaldo, que pide de
+  // MÁS. ⛔ Nunca cero, y ⛔ nunca el par sin el índice.
+  it("T-079-T3: `unknown` cae al RESPALDO, y el respaldo pide de más, nunca de menos", () => {
+    expect(senderMinLamportsForDeposit({ status: "unknown" })).toBe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    expect(senderMinLamportsForDeposit({ status: "unknown" })).toBe(8_874_560);
+    // Y que el respaldo es MAYOR que lo que las dos cadenas piden hoy, o sea que degradar a él pide de
+    // más. Los dos números son lecturas del 2026-09-04, escritas a mano como oráculos.
+    expect(8_874_560).toBeGreaterThan(6_503_880); // devnet hoy
+    expect(8_874_560).toBeGreaterThan(8_083_913); // mainnet hoy: 3.641.475 + 80.000 + 18.000 + 4.344.438
+  });
+});
+
 describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar con el umbral", () => {
   /** El par de cuentas medido en devnet el 2026-09-03, leído cuenta por cuenta con
    *  `getAccountInfo` / `getTokenAccountsByOwner`:
    *    EscrowState `EyUXgVNLjYJ2Av8NayGH9q8aeKCsxtkPhYXQz8rVJJxA` = 1.785.906
    *    vault ATA   `H3LA8T3KhVjX8ap2cmNvJhs88nagroEskkMsz17bjdDY` = 1.855.569
-   *  ⛔ VA A MANO, igual que su hermana (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:58`) y por la misma razón:
+   *  ⛔ VA A MANO, igual que su hermana (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:54`) y por la misma razón:
    *  es una MEDICIÓN EN CADENA, o sea un oráculo independiente del módulo. Derivarla del módulo
    *  convertiría la aserción (1) de abajo en la constante mirándose al espejo. */
-  const MEASURED_DEVNET_ESCROW_PAIR_LAMPORTS = 3_641_475;
+  const PAR_VIVO_MAYORITARIO_LAMPORTS = 4_002_000;
+  const PAR_VIVO_MINORITARIO_LAMPORTS = 3_641_475;
 
-  // 🔴 T-077-2 — EL GUARD DE LA HU. La app prometía "0,0040" SOL de vuelta (el valor de MAINNET) y la
-  // cadena donde corre devolvía "0,0036": 360.525 lamports de sobre-promesa. Este `it` es lo que se
-  // pone rojo si alguien vuelve a poner el valor de mainnet del lado que se MUESTRA, y lo hace por
-  // cuatro vías distintas para que ninguna sola pueda quedar vacía.
+  // 🔴 T-079-D3 — EL SUCESOR DE `T-077-2`, Y EL `it` NO SE BORRÓ: SE RE-APUNTÓ. `T-077-2` vigilaba "el
+  // lado que se MUESTRA nunca lleva el valor de mainnet", y sus cuatro vías colgaban de
+  // `ESCROW_DEPOSIT_RENT_RETURNED_` + `LAMPORTS`, que esta HU borró del árbol. La identidad no se
+  // deroga: cambia de sujeto, con el mismo operador y la misma estructura de CUATRO vías.
   //
-  // ⚠️ LO QUE NO CUBRE, declarado: la BANDA. Con `floor` y 4 decimales, TODO el intervalo
-  // [3.600.000, 3.699.999] se escribe "0,0036", así que un mutante de `+5_000` sobre la constante
-  // sobrevive a (3). Es la MISMA limitación ya medida y declarada en `escrow-rent-copy.test.tsx`, y no
-  // se cierra acá: cerrarla pediría mostrar más precisión de la que un humano necesita. Lo que (1) sí
-  // cierra es el VALOR EXACTO de la constante, que es donde vive el defecto.
-  it("🔴 CD-44: lo que se PROMETE DE VUELTA es el MÍNIMO, y nunca el valor de mainnet", () => {
-    // (1) el valor, contra el oráculo en cadena — la identidad NUEVA del lado que hoy no tenía ninguna.
-    expect(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS).toBe(MEASURED_DEVNET_ESCROW_PAIR_LAMPORTS);
-    // (2) y es ESTRICTAMENTE menor que el lado que se cobra: es lo único que prueba que las dos
-    //     direcciones son de verdad DOS y no la misma constante con dos nombres.
-    expect(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS).toBeLessThan(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS);
-    // (3) la CADENA que sale por pantalla, y la que tiene prohibido salir. ⛔ El "0,0036" es un literal
-    //     a mano: derivarlo con `formatLamportsAsSolFloor(...)` de los dos lados sería la función
-    //     mirándose al espejo.
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).toBe("0,0036");
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).not.toBe(
-      formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS), // "0,0040"
-    );
-    // (4) y el CALL-SITE DE PRODUCCIÓN, leído como texto: la pantalla consume el lado que RECIBE. Sin
-    //     esto, cambiar `flow-vm.ts` de vuelta a la constante del lado que COBRA no pondría rojo nada
-    //     acá, porque este archivo no monta la pantalla.
-    const fuente = readFileSync(join(process.cwd(), "src/presentation/flow-vm.ts"), "utf8");
-    // Control positivo: sin él, un `readFileSync` que devolviera vacío haría PASAR el `not.toContain`.
-    expect(fuente).toContain("export function escrowRentExplainer");
-    // 🔴 EL ANCLA LLEVA EL PREFIJO DE LA ASIGNACIÓN, Y NO ES ESTILO (fix-pack AR/BLQ-BAJO-1). La forma
-    //     anterior buscaba sólo `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)`, que
-    //     aparece DOS veces en `flow-vm.ts`: una en el docblock de `escrowRentExplainer` y otra en su
-    //     cuerpo (al 2026-09-03, `:392` y `:431`). `toContain` no las distingue, así que mientras el
-    //     COMENTARIO citara la expresión esta línea quedaba verde pasara lo que pasara en el call-site.
-    //     Medido con la suite completa: `:431` reescrito a `formatLamportsAsSolFloor(3_641_475)` y a un
-    //     literal `"0,0036"` dejaba TODO en verde. Es exactamente la forma del defecto que esta HU vino
-    //     a arreglar —un valor congelado que se vuelve falso solo el día que la cadena mueve su tarifa,
-    //     y ya sabemos que se mueve sola—. Con el prefijo `const monto = ` y el `;` final la cadena es
-    //     ÚNICA en el archivo (`grep -c` da 1; sin el prefijo da 2) y los dos mutantes la ponen roja.
-    // ⚠️ LO QUE ESTA LÍNEA SIGUE SIN CUBRIR: que alguien escriba esta misma sentencia COMPLETA dentro de
-    //     un comentario. El ancla exige la forma de una sentencia, no su posición: no parsea el archivo.
-    expect(fuente).toContain(
-      "const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS);",
-    );
-    expect(fuente).not.toContain("ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS");
+  // 🔴 POR QUÉ LA VÍA (2) ES LA RESPUESTA A "¿QUÉ GUARD SE PONE ROJO CUANDO LA CADENA SE MUEVA?" — y la
+  // respuesta es NINGUNO, y por eso esto es un arreglo de raíz y no otro parche. La vía (2) NO afirma
+  // un VALOR: afirma una DEPENDENCIA — dos entradas distintas producen dos salidas distintas. ⇒
+  // ninguna constante congelada, de ningún valor, puede pasarla. No se pone roja el día que la cadena
+  // se mueve (ese caso se arregla solo, porque la cifra se lee): se pone roja el día que alguien
+  // vuelva a congelar la cifra, que es el único día en que hay algo que arreglar.
+  //
+  // ⚠️ LO QUE NO CUBRE, declarado: la BANDA. Con `floor` y 4 decimales todo el intervalo
+  // [4.000.000, 4.099.999] se escribe "0,0040", así que un mutante de `+5_000` sobre el valor LEÍDO
+  // sobrevive a las aserciones de texto. Es la MISMA limitación ya medida en
+  // `escrow-rent-copy.test.tsx:98-99` y no se cierra acá. Lo que sí quedó cerrado, y antes no lo
+  // estaba, es que la cifra ya no es un valor del módulo que un mutante pueda mover: sale del
+  // argumento, y `T-079-R1` pinea el valor exacto EN EL ADAPTER, con dos sumandos distintos.
+  it("🔴 CD-079-1: la cifra sale de la CADENA, y una lectura fallida no muestra ninguna", () => {
+    // (1) las constantes del lado que se MUESTRA ya NO EXISTEN en el árbol, con control positivo: sin
+    //     él, un `readFileSync` que devolviera vacío haría PASAR los cuatro `not.toContain`.
+    const fuenteRent = readFileSync(join(process.cwd(), "src/application/solana-escrow-rent.ts"), "utf8");
+    expect(fuenteRent).toContain("export function formatLamportsAsSolFloor"); // control positivo
+    expect(fuenteRent).not.toContain("ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS");
+    expect(fuenteRent).not.toContain("ESCROW_DEPOSIT_RENT_CHARGED_LAMPORTS");
+    expect(fuenteRent).not.toContain("ESCROW_STATE_RENT_DEVNET_LAMPORTS");
+    expect(fuenteRent).not.toContain("ESCROW_VAULT_RENT_MAINNET_LAMPORTS");
+
+    // (2) 🔴 LA VÍA QUE NINGÚN LITERAL PUEDE PASAR: la MISMA función, DOS entradas, DOS salidas. Los
+    //     dos valores son los de los dos pares VIVOS de arriba, así que esto no es un caso de
+    //     laboratorio: hoy, en devnet, hay escrows de los dos lados.
+    const a = escrowRentExplainer("remittance", { status: "known", lamports: PAR_VIVO_MAYORITARIO_LAMPORTS }).body;
+    const b = escrowRentExplainer("remittance", { status: "known", lamports: PAR_VIVO_MINORITARIO_LAMPORTS }).body;
+    expect(a).toContain("0,0040");
+    expect(b).toContain("0,0036");
+    expect(b).not.toContain("0,0040");
+    expect(a).not.toContain("0,0036");
+
+    // (3) sin lectura NO SALE NINGUNA CIFRA, y se dice CUÁL de los dos hechos es (CD-079-5).
+    const sinDato = escrowRentExplainer("remittance", { status: "unknown" }).body;
+    expect(sinDato).not.toMatch(/\d,\d{4}/); // ninguna cifra de SOL, de ningún valor
+    expect(sinDato).toContain("no pudimos preguntarle a la red");
+    const sinEscrow = escrowRentExplainer("discovery", { status: "no-escrow" }).body;
+    expect(sinEscrow).not.toMatch(/\d,\d{4}/);
+    expect(sinEscrow).toContain("depende de cada envío");
+    expect(sinEscrow).not.toContain("no pudimos preguntarle a la red"); // ⛔ no se colapsan
+
+    // (4) el CALL-SITE DE PRODUCCIÓN, leído como TEXTO. Sin esto, volver a congelar la cifra dentro de
+    //     `flow-vm.ts` no pondría rojo nada acá, porque este archivo no monta la pantalla.
+    // ⛔ ANCLA VERIFICADA ÚNICA CON `grep -c` ANTES DE ESCRIBIRLA (CD-079-6): da 1 en `flow-vm.ts`. Es
+    //     la lección del auto-blindaje de la 077, donde un ancla que aparecía DOS veces —una en el
+    //     docblock y otra en el cuerpo— dejaba el control verde pasara lo que pasara en el call-site.
+    const fuenteVm = readFileSync(join(process.cwd(), "src/presentation/flow-vm.ts"), "utf8");
+    expect(fuenteVm).toContain("export function escrowRentExplainer"); // control positivo
+    expect(fuenteVm).toContain("formatLamportsAsSolFloor(figura.lamports)"); // sale del PARÁMETRO
+    // Y ninguna cifra congelada pasando por el formateador, de ningún valor.
+    expect(fuenteVm).not.toMatch(/formatLamportsAsSolFloor\(\s*\d[\d_]*\s*\)/);
   });
 
-  it("el alquiler de las dos cuentas se muestra como 0,0036", () => {
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).toBe("0,0036");
+  it("el alquiler de los DOS pares vivos se muestra distinto, y con floor", () => {
+    expect(formatLamportsAsSolFloor(PAR_VIVO_MINORITARIO_LAMPORTS)).toBe("0,0036");
+    expect(formatLamportsAsSolFloor(PAR_VIVO_MAYORITARIO_LAMPORTS)).toBe("0,0040");
   });
 
   // 🔴 ESTE es el test que hace que el de copy discrimine. Con el umbral en 4.100.000,
@@ -398,13 +481,13 @@ describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar 
   // umbral vuelva a caer cerca del alquiler, la colisión vuelve sola. La primera aserción de abajo es la
   // única que no depende de ese valor, y es la que sostiene al test de copy.
   it("la cifra del cierre NO puede colisionar con la del umbral de depósito", () => {
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).not.toBe(
+    expect(formatLamportsAsSolFloor(PAR_VIVO_MINORITARIO_LAMPORTS)).not.toBe(
       formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
     );
     // Y el estado ACTUAL de la colisión del ceil, fijado para que su desaparición no pase inadvertida:
     // hoy NO colisionan. Si este assert se pone rojo, el umbral volvió a acercarse al alquiler y el
     // floor pasó de ser una precaución a ser lo único que separa las dos cifras en pantalla.
-    expect(formatLamportsAsSol(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).not.toBe(
+    expect(formatLamportsAsSol(PAR_VIVO_MINORITARIO_LAMPORTS)).not.toBe(
       formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
     );
   });
@@ -417,8 +500,8 @@ describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar 
   });
 
   it("usa coma decimal (es-PE), no punto, igual que su hermana", () => {
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).toContain(",");
-    expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)).not.toContain(".");
+    expect(formatLamportsAsSolFloor(PAR_VIVO_MINORITARIO_LAMPORTS)).toContain(",");
+    expect(formatLamportsAsSolFloor(PAR_VIVO_MINORITARIO_LAMPORTS)).not.toContain(".");
   });
 });
 
@@ -455,7 +538,7 @@ describe("el umbral del camino por enlace profundo (durable nonce)", () => {
   });
 
   it("los DOS `75_000` del archivo son el mismo valor (candado contra la deriva silenciosa)", () => {
-    // (`REFUND_FEE_ALLOWANCE_LAMPORTS`, `solana-escrow-rent.ts:181`) lleva `5_000 + 75_000` literales y NO se puede
+    // (`REFUND_FEE_ALLOWANCE_LAMPORTS`, `solana-escrow-rent.ts:196`) lleva `5_000 + 75_000` literales y NO se puede
     // reescribir para usar las constantes (se declara antes que ellas). Este assert es lo único que
     // impide que los dos 75.000 se separen sin que nada se ponga rojo.
     expect(WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS).toBe(75_000);

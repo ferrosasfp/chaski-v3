@@ -18,7 +18,7 @@ import {
   FakePayoutGateway,
   FakeQuoteGateway,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — `use-cases.test.ts:244` lo citan `flow-vm.ts` (×2) y `flow-vm.test.ts` por número.
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
   FakePruebaDePosesionPorEnlace,
@@ -67,7 +67,7 @@ function setup(opts?: {
       prepare: new FakeSolanaPayoutPrepareGateway(),
       gateway: opts?.solanaGateway ?? new FakeSolanaSettlementGateway(),
       probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
     }),
     track: new TrackRemittance(payout, repo, clock, new FakeRefundGateway()),
   };

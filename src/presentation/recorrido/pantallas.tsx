@@ -447,7 +447,7 @@ export function PantallaIdentidad(p: {
  * ⛔ EL NÚMERO DE FIRMAS NO SE ESCRIBE ACÁ NI EN NINGÚN LADO (`CD-W1-6`): el anuncio enumera las
  * firmas que el camino elegido va a pedir y muestra el largo de esa lista.
  *
- * El texto del alquiler se REUSA de (`escrowRentExplainer`, `../flow-vm.ts:426`) en su voz
+ * El texto del alquiler se REUSA de (`escrowRentExplainer`, `../flow-vm.ts:429`) en su voz
  * `discovery`, que es la que describe el mecanismo sin afirmar que ya haya pasado: acá todavía no
  * pasó nada. ⛔ No se escribe una segunda explicación del mismo hecho.
  */
@@ -465,7 +465,7 @@ export function PantallaFirmar(p: {
   onSalirALaBilletera: () => void;
   onVolver: () => void;
 }) {
-  const alquiler = escrowRentExplainer("discovery");
+  const alquiler = escrowRentExplainer("discovery", { status: "no-escrow" }); // 🔴 HU-079: sin cifra, Y ESO ES UNA LIMITACIÓN DECLARADA, no la respuesta correcta. La pregunta de ESTA pantalla es la PROSPECTIVA —"si firmo ahora, ¿cuánto me inmoviliza la red?"— y la lectura para contestarla YA EXISTE (`readNewDepositRent`, `../../application/ports.ts:1320`); lo que falta es atravesar el VM del recorrido con ella, y eso es otra ola. Mitigante MEDIDO, no excusa: esta pantalla cuelga de `recorridoV2Enabled()`, que es opt-in estricto y está APAGADA, así que hoy no corre en producción. ⛔ Lo que NO se hace mientras tanto es darle la cifra RETROSPECTIVA: sería contestar con el número de otra pregunta.
   return (
     <Card>
       <Encabezado titulo="Firmar y enviar" bajada="Revisá lo que vas a firmar antes de salir." />

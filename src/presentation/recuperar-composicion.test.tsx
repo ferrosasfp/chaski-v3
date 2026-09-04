@@ -258,19 +258,34 @@ const RENGLONES = [
     // Esta puerta habla de USDC y de ninguna cifra en SOL: lo que saca del contrato son los USDC del
     // envío ("esa sí es la transacción que saca tus USDC", en su propio cuerpo).
     dice: /USDC/,
-    noDice: /\d[.,]\d+\s*SOL/,
+    noDice: /una parte de tu SOL/,
   },
   {
     puerta: /Recuperar el depósito de red de envíos anteriores/,
     frase:
       "Busca SOL: el depósito que la red retiene por las cuentas de un envío, y que sólo se libera cerrándolas cuando ese envío ya terminó.",
     real: QUE_RECUPERA.depositoDeRed,
-    // Y ésta habla de una CIFRA EN SOL, que sale de `ESCROW_DEPOSIT_RENT_LAMPORTS` formateada por
-    // `escrowRentExplainer`. La cifra es lo que distingue las dos puertas de verdad: la de al lado no
-    // tiene ninguna. ⛔ El regex pide un dígito antes de "SOL" a propósito — un `/SOL/` pelado también
-    // matchearía la palabra en otra frase, y "Solana" (que las dos dicen) no matchea ninguno de los
-    // dos porque el case importa.
-    dice: /\d[.,]\d+\s*SOL/,
+    // Y ésta habla de SOL, mientras que la de al lado habla de USDC. Ése es el discriminador.
+    //
+    // 🔴 ACÁ EL REGEX PEDÍA UN DÍGITO ANTES DE "SOL" Y HU-079 SE LO SACÓ. NO ES UN ABLANDAMIENTO Y VA
+    // DICHO ENTERO, porque leído rápido lo parece. La cifra desapareció de esta puerta A PROPÓSITO y no
+    // por un descuido: el alquiler queda CONGELADO en las cuentas de cada envío el día que se crean, y
+    // medido en devnet el 2026-09-04 los 15 escrows vivos tenían DOS valores distintos (4.002.000 en 14
+    // y 3.641.475 en 1). Esta puerta se monta ANTES de buscar nada, así que cualquier cifra única acá
+    // sería falsa para alguien por construcción. Hoy dice "una parte de tu SOL" y "cuánto exactamente
+    // depende de cada envío".
+    //
+    // LO QUE CUESTA, medido y no supuesto: el discriminador pasa de "tiene una cifra en SOL" a una
+    // frase del cuerpo que nombra la moneda, que es más débil. Lo que lo mantiene siendo un
+    // discriminador de VERDAD es que ahora es SIMÉTRICO —la puerta de USDC lleva el MISMO patrón en su
+    // `noDice`—, así que el intercambio de renglones se caza por los dos lados igual que antes.
+    //
+    // ⛔ Y EL PATRÓN ES LA FRASE ENTERA Y NO `/\bSOL\b/`, POR UN MOTIVO MEDIDO ACÁ: este test lee
+    // `document.body`, y el body trae los DOS renglones (sólo el PANEL es el que se abre). El renglón
+    // de la otra puerta empieza con "Busca SOL: …", así que un `/\bSOL\b/` matchea SIEMPRE, en las dos
+    // puertas, y el `noDice` de la de USDC se pondría rojo sin que nada esté mal. Un patrón que matchea
+    // el renglón en vez del panel convierte este `it` en uno que no puede distinguir nada.
+    dice: /una parte de tu SOL/,
     noDice: null,
   },
 ] as const;
@@ -316,10 +331,10 @@ describe("T-063-13 (2º pase): cada puerta dice QUÉ MONEDA busca, y se comprueb
     //
     // El intercambio se caza por los DOS lados, y por eso hay `dice` y `noDice`.
     //
-    //   · el renglón "Busca SOL" pegado a la puerta del envío perdido ⇒ su panel no tiene ninguna
-    //     cifra en SOL ⇒ rojo por `dice`;
-    //   · el renglón "Busca USDC" pegado a la puerta del alquiler ⇒ su panel SÍ tiene la cifra en SOL,
-    //     que es de lo que esa puerta habla ⇒ rojo por `noDice`.
+    //   · el renglón "Busca SOL" pegado a la puerta del envío perdido ⇒ su panel no nombra SOL ⇒ rojo
+    //     por `dice`;
+    //   · el renglón "Busca USDC" pegado a la puerta del alquiler ⇒ su panel SÍ nombra SOL, que es de
+    //     lo que esa puerta habla ⇒ rojo por `noDice`.
     //
     // ⚠️ LO QUE ESTE `it` NO VERIFICA, dicho antes de que alguien lo lea de más: que "sólo se libera
     // cuando ese envío ya terminó" sea cierto. Eso es un guard de la cadena

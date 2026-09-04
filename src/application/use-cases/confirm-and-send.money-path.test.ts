@@ -12,7 +12,7 @@ import {
   FAKE_SOLANA_SIGNATURE,
   FakePayoutGateway,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeSolanaEscrowRefundGateway,
   FakeSolanaPayoutPrepareGateway,
   type FakeSolanaPrepareResult, // WKH-354/AC-5: la forma de la respuesta del prepare, para el doble que VERIFICA la PoP
@@ -27,7 +27,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
-import type { AutorizacionDelPrincipal, PruebaDePosesionPorEnlace, RefundGateway, SolanaPayoutPrepareGateway, WalletPort } from "../ports"; // WKH-356/AR/BLQ-BAJO-1: el doble que SUSPENDE una vez implementa el puerto REAL, así que no puede quedarse corto de contrato
+import type { AutorizacionDelPrincipal, PruebaDePosesionPorEnlace, RefundGateway, SolanaPayoutPrepareGateway, SolanaRentReader, WalletPort } from "../ports"; // WKH-356/AR/BLQ-BAJO-1: el doble que SUSPENDE una vez implementa el puerto REAL, así que no puede quedarse corto de contrato
 import type { Beneficiary } from "../../domain/remittance"; // WKH-354/AC-5: el doble de prepare implementa el puerto REAL, así que declara el contrato real
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import {
@@ -90,13 +90,14 @@ function build(
   // INYECTADO, que es el de todos los `it` de este archivo (AC-8): si el paso nuevo tocara ese camino,
   // se pondrían rojos ellos y no habría que escribir un `it` para notarlo.
   pop: PruebaDePosesionPorEnlace = new FakePruebaDePosesionPorEnlace(),
+  rent: SolanaRentReader = new FakeSolanaRentReader(4_002_000, "unknown"), // HU-079: `unknown` deja el umbral en el RESPALDO, o sea el valor que estos `it` ya asumían.
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
     repo,
     new FixedClock(),
     refund,
-    { prepare, gateway, probe, senderBalance, pop },
+    { prepare, gateway, probe, senderBalance, pop, rent },
   );
 }
 
@@ -226,7 +227,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
       gateway,
       probe: new FakeSolanaEscrowDepositProbe("not_deposited"),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(),
-      pop: new FakePruebaDePosesionPorEnlace(), // WKH-359: `no-corresponde` = camino inyectado (AC-8)
+      pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ // WKH-359: `no-corresponde` = camino inyectado (AC-8)
     });
 
     // Invocación 1: suspende. La remesa QUEDA en `confirmed`, que es la precondición de AC-3.

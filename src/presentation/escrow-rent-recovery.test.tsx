@@ -151,15 +151,25 @@ describe("AC-8: qué se dice ANTES de abrir ningún diálogo de firma", () => {
     expect(screen.getByText(/su comisión de red la pagás vos/)).toBeInTheDocument();
   });
 
-  it("dice qué se recupera y qué NO, con la cifra del floor y sin las siete equivocadas", () => {
+  it("dice qué se recupera y qué NO, y NINGUNA cifra — porque acá todavía no hay envío", () => {
     abrirPuerta(new FakeSolanaCloseableEscrowLister([]));
     const texto = document.body.textContent ?? "";
-    expect(texto).toContain("0,0036");
-    // 🔴 HU-077 — LA LISTA SE RE-DERIVÓ Y PASÓ DE 5 A 7 CADENAS, y ⛔ no se borró ninguna de las viejas.
-    // La pantalla prometía "0,0040" (el valor de MAINNET, 4.002.000) y la cadena donde la app corre
-    // devuelve 3.641.475 ⇒ "0,0036". Por eso "0,0040" cambia de lado: era la aserción de PRESENCIA y
-    // pasa a ser un guard de regresión por AUSENCIA. Las otras dos nuevas son el ceil del alquiler
-    // nuevo y la suma con el índice sobre el total nuevo (3.641.475 + 4.774.560 = 8.416.035).
+    // 🔴 HU-079 — ACÁ DECÍA `toContain("0,0036")` Y AHORA DICE LO CONTRARIO, y el cambio es el corazón
+    // de esta HU. La puerta de descubrimiento se monta ANTES de buscar nada, así que no hay UN envío
+    // del que hablar; y aunque lo hubiera, una cifra ÚNICA para una LISTA es falsa por construcción: el
+    // alquiler queda CONGELADO en las cuentas el día que se crean, y medido en devnet el 2026-09-04 los
+    // 15 escrows vivos tenían DOS valores distintos (4.002.000 en 14 de ellos, 3.641.475 en 1).
+    // Mostrar "0,0036" acá le prometía de MENOS a 14 de cada 15 personas.
+    //
+    // ⛔ Y NO SALE NINGUNA CIFRA, de ningún valor — no una cifra vieja, no un promedio, no un "desde".
+    // Sale una FRASE: "cuánto exactamente depende de cada envío" (CD-079-5), que es un hecho distinto
+    // de "no pudimos preguntarle a la red" y por eso se dice con otras palabras.
+    expect(texto).not.toMatch(/\d,\d{4}/);
+    expect(texto).toContain("depende de cada envío");
+    expect(texto).not.toContain("no pudimos preguntarle a la red"); // ⛔ los dos hechos no se colapsan
+    // Y la lista de ausencias, que ⛔ no perdió ninguna: cada cadena sigue señalando un error real, y
+    // ahora "0,0036" y "0,0040" están las dos del lado de la ausencia porque acá NINGUNA es correcta.
+    expect(texto).not.toContain("0,0036"); // el valor que la HU-077 congeló
     expect(texto).not.toContain("0,0040"); // 🔴 el valor de MAINNET del lado que se muestra: EL DEFECTO
     expect(texto).not.toContain("0,0037"); // ceil del alquiler que vuelve (formateador equivocado)
     expect(texto).not.toContain("0,0041"); // ceil del valor de mainnet. ⚠️ WKH-347: ya NO es también el umbral de depósito, que pasó a "0,0089"; la aserción sigue valiendo por el ceil
@@ -201,7 +211,8 @@ describe("la puerta no afirma nada sobre un envío que todavía no se buscó", (
     // Control positivo: el bloque explicativo SÍ está montado, o sea que los `false` de arriba no
     // pasan por una pantalla vacía.
     expect(texto).toContain("Recuperá tu depósito de red");
-    expect(texto).toContain("0,0036");
+    // HU-079: el control positivo pasa a ser una frase y no una cifra, porque acá ya no hay ninguna.
+    expect(texto).toContain("depende de cada envío");
   });
 
   // El caso B del hallazgo: el registro apagado es el camino de fallo MÁS probable (lo prende una
@@ -259,7 +270,7 @@ describe("con varios cerrables, el explicativo no se repite una vez por envío",
     for (const frase of [
       "Recuperá tu depósito de red",
       "la que guardó tus USDC",
-      "0,0036",
+      "depende de cada envío", // HU-079: era "0,0036"; la puerta ya no muestra ninguna cifra
       "Hay una tercera cuenta",
     ]) {
       expect([frase, veces(texto, frase)]).toEqual([frase, 1]);

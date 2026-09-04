@@ -23,7 +23,7 @@ import {
   FAKE_SOLANA_SIGNATURE,
   FakePayoutGateway,
   FakeRefundGateway,
-  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowDepositProbe, FakeSolanaRentReader, // HU-079: EN ESTA LÍNEA, no en una nueva — este archivo recibe (o alimenta) citas ancladas por número, y una línea de más las corre a todas.
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
   FakePruebaDePosesionPorEnlace,
@@ -92,7 +92,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     // Orden REAL de invocación: prepare ANTES de firmar ANTES de settle.
@@ -132,7 +132,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(prepareSpy).toHaveBeenCalledTimes(1);
@@ -166,7 +166,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(
@@ -189,7 +189,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       clock,
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(prepareSpy).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       refund,
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(authorizeSpy).not.toHaveBeenCalled(); // AC-7: NUNCA se pidió la firma
@@ -241,7 +241,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
         prepare: new FakeSolanaPayoutPrepareGateway(),
         gateway: new FakeSolanaSettlementGateway(),
         probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */
       },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
@@ -269,7 +269,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(), rent: new FakeSolanaRentReader(4_002_000, "unknown"), /* HU-079: modo `unknown` a propósito — deja el umbral en el RESPALDO (8.874.560), que es el valor que estos tests ya asumían. Un doble que contestara la lectura de hoy bajaría el umbral a 6.503.880 y cambiaría el resultado de tests que no van sobre esto. */ },
     ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.principalTx).toBeNull();

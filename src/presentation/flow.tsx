@@ -63,7 +63,7 @@ import {
   escrowRefundError,
   escrowRentDiscoveryEmpty,
   escrowRentDiscoveryError,
-  escrowRentExplainer,
+  escrowRentExplainer, type EscrowRentFigure, // HU-079: EN ESTA LÍNEA (Δ0)
   type FlowError,
   humanError,
   isDemoMode,
@@ -1169,7 +1169,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
             <TrackView
               rem={rem}
               recover={c.recoverEscrowFunds}
-              closeEscrow={c.closeEscrowAccounts}
+              closeEscrow={c.closeEscrowAccounts} rent={c.solanaRent}
               sender={address}
               // WKH-339 — las DOS capacidades van JUNTAS o ninguna: preguntar el estado sin poder
               // renovar deja la pantalla sin salida, y poder renovar sin saber el estado es el botón
@@ -1510,7 +1510,7 @@ function guardarIntentos(sender: string | null, n: number): void {
 export function TrackView({
   rem,
   recover,
-  closeEscrow,
+  closeEscrow, rent, // HU-079: EN ESTA LÍNEA (Δ0)
   sender,
   onRecovered,
   revision,
@@ -1521,7 +1521,7 @@ export function TrackView({
   recover?: Container["recoverEscrowFunds"];
   // WKH-327: el use-case del cierre, por la misma razón — acá vive el guard de AC-7 (que la billetera
   // conectada sea la que pagó el alquiler), y saltearlo pasando el gateway suelto lo dejaría afuera.
-  closeEscrow?: Container["closeEscrowAccounts"];
+  closeEscrow?: Container["closeEscrowAccounts"]; rent?: Container["solanaRent"]; // HU-079: EN ESTA LÍNEA (Δ0). OPCIONAL acá aunque en el Container vaya SIN `?`: este componente se monta en tests que no arman container, y su ausencia tiene un desenlace DEFINIDO —`unknown`, o sea sin cifra— y nunca un literal.
   sender: string | null;
   onRecovered: (snapshot: RemittanceState) => void;
   // ── WKH-339 · UNA prop, OPCIONAL, y las dos capacidades JUNTAS ─────────────────────────────────
@@ -1806,7 +1806,7 @@ export function TrackView({
         {/* WKH-327: acá la app ya sabe que hay un escrow de esta persona, así que cubre el caso
             "acabo de recuperar mis fondos y ahora cierro las cuentas" sin ningún descubrimiento. */}
         {showClose && closeEscrow && sender ? (
-          <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
+          <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" rent={rent} />
         ) : null}
       </Card>
     );
@@ -1946,7 +1946,7 @@ export function TrackView({
       ) : null}
       {/* WKH-327 — ver el comentario del otro punto de montaje. */}
       {showClose && closeEscrow && sender ? (
-        <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
+        <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" rent={rent} />
       ) : null}
     </Card>
   );
@@ -2236,20 +2236,20 @@ export function CloseEscrowAction({
   remittanceId,
   sender,
   close,
-  explainer: explainerMode,
+  explainer: explainerMode, rent, // HU-079: EN ESTA LÍNEA (Δ0)
 }: {
   remittanceId: string;
   sender: string;
   close: NonNullable<Container["closeEscrowAccounts"]>;
   /** "own": el componente se explica solo (va suelto en `TrackView`). "inherited": el bloque ya está
    *  montado por quien lo contiene, y repetirlo por ítem es la duplicación de MNR-1. */
-  explainer: "own" | "inherited";
+  explainer: "own" | "inherited"; rent?: Container["solanaRent"]; /* HU-079: EN ESTA LÍNEA (Δ0). OPCIONAL aunque en el Container vaya SIN `?`: este componente se monta en tests que no arman container, y su ausencia tiene un desenlace DEFINIDO —se queda en `unknown`, o sea SIN CIFRA— y jamás un literal. ⛔ COMENTARIO DE BLOQUE Y NO `//`: la línea sigue con el cierre del tipo. */
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<"confirmed" | "pending" | "unknown" | null>(null);
-  // La voz concreta: acá SÍ hay un envío elegido y terminado (ver `escrowRentExplainer`).
-  const explainer = escrowRentExplainer("remittance");
+  const [figura, setFigura] = useState<EscrowRentFigure>({ status: "unknown" }); useEffect(() => { if (explainerMode !== "own" || !rent) return; let vivo = true; rent.readOpenEscrowRent({ sender, remittanceId }).then((r) => { if (vivo) setFigura(r); }).catch(() => { if (vivo) setFigura({ status: "unknown" }); }); return () => { vivo = false; }; }, [rent, sender, remittanceId, explainerMode]); // 🔴 HU-079, EN ESTA MISMA LÍNEA (Δ0: este archivo recibe ~165 citas ancladas por número y una línea nueva las corre a todas). ⛔ EL ESTADO INICIAL ES `unknown` Y NO UN LITERAL, y el `catch` vuelve a `unknown` en vez de caer a una cifra: un fallback a constante en el lado que MUESTRA es re-introducir el defecto que esta HU cierra, y encima INVISIBLE, porque la pantalla se ve normal (CD-079-4). ⛔ SÓLO LEE CON `explainerMode === "own"`: con `"inherited"` el bloque explicativo no se monta, así que una lectura por fila sería el N+1 que MNR-1 ya cazó acá mismo — con el tope de 20 cerrables serían 20 pares de `getAccountInfo` para un texto que no se muestra. ⚠️ El `vivo` no es ceremonia: la puerta de descubrimiento desmonta estas filas al re-buscar, y un `setFigura` después del desmonte es un warning de React sobre una cifra que ya no se ve.
+  const explainer = escrowRentExplainer("remittance", figura); // la voz concreta: acá SÍ hay un envío elegido y terminado
 
   const onClose = useCallback(async () => {
     setBusy(true);
@@ -2584,7 +2584,7 @@ export function EscrowRentRecovery({
   // todavía no se buscó nada. Con la voz de `CloseEscrowAction` la pantalla decía "Este envío ya
   // terminó, así que se pueden cerrar" sin que existiera ningún envío, y si el descubrimiento fallaba
   // lo decía JUNTO con "no llegamos a preguntar".
-  const explainer = escrowRentExplainer("discovery");
+  const explainer = escrowRentExplainer("discovery", { status: "no-escrow" }); // 🔴 HU-079: `no-escrow` y NO una cifra, y NO es una degradación: acá todavía no hay ningún envío del que hablar. Y aunque lo hubiera, una cifra ÚNICA para una LISTA es falsa por construcción — el alquiler queda congelado por par de cuentas el día que se crean, y en devnet el 2026-09-04 los 15 escrows vivos tenían DOS valores distintos (4.002.000 ×14, 3.641.475 ×1). Darle a CADA FILA la suya es una ola aparte.
 
   const onSearch = useCallback(async () => {
     if (!lister) return;

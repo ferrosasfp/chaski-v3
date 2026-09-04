@@ -182,8 +182,8 @@ export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
  *  COBRABA 6960: el subtotal de arriba. Se escribe como la MEDICIÓN y no como la suma de sus partes a
  *  propósito — son dos fuentes independientes del mismo número, y hay un test que verifica que coinciden
  *  con la suma de sus hojas. 🔴 HU-079: esas hojas SE BORRARON y este número se queda, ahora como lo
- *  que es — un RESPALDO: ver su renglón en el bloque de arriba y (`senderMinLamportsForDeposit`,
- *  `:240`), que es quien lo usa cuando la lectura de cadena no ocurre.
+ *  que es — un RESPALDO: ver su renglón en el bloque de arriba. Quien lo usa cuando la lectura de
+ *  cadena no ocurre es (`senderMinLamportsForDeposit`, `:241`). ⚠️ Fix-pack AR/MNR-1: decía `:240`, que es la línea de cierre de este mismo docblock, y además estaba PARTIDA en el salto de línea, o sea invisible para `citas-ancladas.test.ts`, que aplica su patrón línea por línea. Toda cita anclada va ENTERA en una sola línea o el guard no la mira.
  *  ⛔ CD-079-2 — literal de los ILEGÍTIMOS, igual que su vecino: es una tarifa que la cadena mueve
  *  sola. Δ0 en su valor, y por la misma razón: es el máximo histórico medido, así que degradar a él
  *  pide de MÁS. Medido el 2026-09-04, el par de cuentas cuesta 2.921.000 en devnet y 3.641.475 en

@@ -12,7 +12,7 @@ import {
 } from "../application/agent-rejections";
 import {
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
-  formatLamportsAsSol,
+  formatLamportsAsSol, senderMinLamportsForDeposit, // fix-pack AR/BLQ-BAJO-1: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "../application/solana-escrow-rent";
 import {
   deliveredDisplay,
@@ -3354,5 +3354,67 @@ describe("T-075-COPY (WKH-075/AC-3): la vuelta que no se pudo resolver no se con
         "el copy afirma que la vuelta llegó BIEN, y en el punto donde se emite no corrió nada que mire la respuesta",
       ).not.toMatch(AFIRMA_QUE_LA_VUELTA_SIRVIÓ);
     }
+  });
+});
+// ── T-079-C1 (fix-pack AR/BLQ-BAJO-1) — EL CUANTIFICADOR DEL COPY, CON TESTIGO ─────────────────────
+//
+// 🔴 QUÉ DEFECTO CIERRA. La HU-079 movió el copy de `solana_sender_sol_insufficient` de «necesitás AL
+// MENOS X» a «con X te alcanza seguro», y justificó el cambio afirmando que X —el RESPALDO
+// `SENDER_MIN_LAMPORTS_FOR_DEPOSIT`— es una COTA SUPERIOR de lo que la red puede pedir. No lo es, y el
+// docblock vecino de `solana-escrow-rent.ts` lo dice con todas las letras en el MISMO commit: «6960 fue
+// el máximo histórico, no una cota». Dos comentarios del mismo diff se contradecían, y el que ganó fue
+// el que le habla a la persona. La dirección importa: el texto viejo era verdadero-pero-corto, el nuevo
+// era directamente FALSO, y falso justo en la dirección que la HU existe para cerrar.
+//
+// 🔴 POR QUÉ ESTE `describe` NO PUEDE ESTAR VACÍO, mitad por mitad:
+//   · (a) NO lee el copy ni la fuente: le pregunta a la función REAL `senderMinLamportsForDeposit` por
+//     un estado de cadena concreto, y afirma que el respaldo se queda CORTO ahí. Se pone roja el día
+//     que el respaldo sí sea una cota superior, que es exactamente el día en que la promesa de
+//     suficiencia se podría volver a escribir. O sea: el `it` que autoriza el cambio de copy.
+//   · (b) mide la SALIDA de `humanError`, no el texto de `flow-vm.ts`, así que no se lee a sí misma.
+//
+// MUTANTES MEDIDOS (los dos, con su motivo literal, no sólo su color):
+//   M-C1  restaurar «te alcanza seguro» en el copy de `flow-vm.ts` ⇒ (b) ROJA, y por su primer assert
+//         («el copy promete que la cifra alcanza…»), no por un vecino.
+//   M-C2  subir el respaldo por encima de 9.555.500 ⇒ (a) ROJA. Es el control que impide que (a) sea
+//         una tautología: hoy pasa porque el respaldo se queda corto, no porque compare algo consigo mismo.
+describe("T-079-C1 · el copy del SOL insuficiente no promete una suficiencia que nada garantiza", () => {
+  // El escenario que midió el AR, reconstruido para pasárselo a la función de verdad. Con un factor de
+  // alquiler de 7500 lamports por byte-año (el que el docblock de `senderMinLamportsForDeposit` nombra
+  // como posible, y que está por encima del máximo histórico de 6960):
+  //   par   = (128 + 154) × 7500  +  (128 + 165) × 7500 = 2.115.000 + 2.197.500 = 4.312.500
+  //   índice= (128 + 558) × 7500                        = 5.145.000
+  // ⚠️ Los tres tamaños (154 `EscrowState`, 165 la ATA del vault, 558 `EscrowIndex`) son propiedades del
+  // programa desplegado, no de la tarifa: por eso se pueden escribir acá. Lo que NO se escribe es el
+  // resultado del umbral, que sale de la función.
+  const CADENA_MAS_CARA = {
+    status: "known",
+    escrowPairLamports: 4_312_500,
+    escrowIndexLamports: 5_145_000,
+  } as const;
+
+  it("(a) el respaldo NO es una cota superior: hay un estado de cadena donde el guard exige MÁS", () => {
+    const exigido = senderMinLamportsForDeposit(CADENA_MAS_CARA);
+    expect(exigido).toBe(9_555_500); // 4.312.500 + 5.145.000 + 75.000 (propina) + 5.000 (fee) + 18.000 (redondeo)
+    expect(
+      exigido > SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+      "el respaldo pasó a cubrir este escenario: si además cubre TODOS los factores posibles, recién ahí el copy puede volver a prometer suficiencia",
+    ).toBe(true);
+  });
+
+  it("(b) y por eso el copy NO afirma que la cifra alcance, y sí nombra la dirección que cuesta plata", () => {
+    const copy = humanError("solana_sender_sol_insufficient");
+    // ⛔ Ninguna promesa de suficiencia sobre un número que el respaldo no garantiza (CD-079-7).
+    expect(
+      copy,
+      "el copy promete que la cifra alcanza, y (a) acaba de mostrar un estado de cadena donde no alcanza",
+    ).not.toMatch(/te alcanza|alcanza seguro|es suficiente|suficiente para|al menos|como máximo|no vas a necesitar más/i);
+    // Y la dirección cara, DICHA: la red puede pedir MÁS que la cifra que se imprime. Sin esto, "de
+    // referencia" a secas se lee como un mínimo y volvemos al defecto de la 077 por otra puerta.
+    expect(copy, "el copy no avisa que la red puede pedir MÁS que la cifra de referencia").toMatch(/pida más/i);
+    expect(copy, "el copy no dice que la cifra es de referencia y no el monto exacto").toContain("de referencia");
+    // La cifra sigue saliendo de la constante (lo que un literal a mano no pasaría es `T-347-14`).
+    expect(copy).toContain(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT));
+    expect(copy, "em dash en copy público").not.toMatch(/[—–]/);
   });
 });

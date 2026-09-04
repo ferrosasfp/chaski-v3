@@ -21,14 +21,14 @@
 // mientras sigue siéndolo por la otra (haber usado el ceil sobre el alquiler). Se conserva por eso, y
 // porque el umbral ya se movió tres veces y puede volver a acercarse.
 //
-// 🔴 POR QUÉ `within(...)` Y NO `document.body`. `humanError("solana_sender_sol_insufficient")` renderiza
-// LEGÍTIMAMENTE la cifra del umbral de SOL (flow-vm.ts) — hoy "0,0089", antes de WKH-347 "0,0041". La
-// razón del `within` no cambió con el número: una aserción de ausencia sobre todo el documento se pondría
+// 🔴 POR QUÉ EL SUBÁRBOL (`subarbolDelCierre()`) Y NO `document.body`. `humanError("solana_sender_sol_insufficient")`
+// renderiza LEGÍTIMAMENTE la cifra del umbral de SOL (flow-vm.ts) — hoy "0,0089", antes de WKH-347 "0,0041". La
+// razón no cambió con el número: una aserción de ausencia sobre todo el documento se pondría
 // roja por algo que no tiene nada que ver con AC-6, y el arreglo "obvio" sería borrar la aserción, que es
-// justo la que ataja el error que este archivo existe para atajar.
+// justo la que ataja el error que este archivo existe para atajar. ⚠️ Fix-pack AR/MNR-3: acá se nombraba a `within(...)`, que ya no se usa.
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react"; // ⚠️ `within` salió con el fix-pack AR/MNR-3: su único uso era el assert que no podía fallar.
 import { CloseEscrowAction, TrackView } from "./flow";
 import {
   escrowCloseError,
@@ -99,8 +99,8 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
         rent={new FakeSolanaRentReader(PAR_VIVO_MAYORITARIO)}
       />,
     );
-    const card = within(await screen.findByText(/0,0040/));
-    expect(card).toBeDefined();
+    await screen.findByText(/0,0040/); // ⏳ SÓLO espera al efecto asíncrono. La ASERCIÓN es la de abajo, y va contra el SUBÁRBOL.
+    expect(subarbolDelCierre().textContent ?? "", "la tarjeta del cierre no dice la cifra que la cadena devolvió").toContain("0,0040"); // 🔴 Fix-pack AR/MNR-3: acá decía `expect(within(await findByText(...))).toBeDefined()`, y `within()` SIEMPRE devuelve un objeto ⇒ ese assert no podía fallar NUNCA, en el archivo que documenta ese modo de falla. Además el `findByText` barre TODO el documento, contra lo que declara la cabecera. Molde: el `it` hermano de más abajo (`findByText` espera, `subarbolDelCierre()` afirma). MEDIDO con el mutante que saca la cifra del subárbol dejándola en el documento: con el assert viejo el `it` quedaba VERDE, con éste sale ROJO.
 
     const texto = subarbolDelCierre().textContent ?? "";
     // ⚠️ QUÉ CUBRE ESTA LISTA Y QUÉ NO — la versión corregida de una frase que afirmaba de más

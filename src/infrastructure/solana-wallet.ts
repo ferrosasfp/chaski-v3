@@ -2630,7 +2630,7 @@ function sleep(ms: number): Promise<void> {
 // de alquiler de acá arriba se pregunta en vez de escribirse.
 
 /** El `space` de la cuenta `EscrowState` del programa desplegado: 8 (discriminador Anchor) + los
- *  campos. Derivación completa en `../application/solana-escrow-rent.ts:148-152`.
+ *  campos. ⚠️ Fix-pack AR/MNR-2: acá decía «derivación completa en `../application/solana-escrow-rent.ts:148-152`» y ese rango deriva el `EscrowIndex` (⇒ 558 bytes), no éste. NO existe en este repo ninguna descomposición campo por campo de este 154: la suma vive en el Rust de `solana-programs`, fuera de este árbol. Lo que respalda el número acá es la verificación contra la cadena de las tres líneas de abajo, y sólo eso.
  *
  *  ✅ LITERAL LEGÍTIMO POR `CD-079-2`: esto NO es la tarifa de la cadena, es una propiedad del PROGRAMA
  *  DESPLEGADO. Sólo cambia con un redespliegue, o sea con un commit de `solana-programs`, y ahí un
